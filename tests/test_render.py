@@ -109,6 +109,8 @@ def trade(sym, entry, exp, pl, **over):
         credit=0.25,
         spot=10.0,
         settle=10.0,
+        buyback=None,
+        exit=exp,
         score=44,
         collat=900.0,
         pl=pl,
@@ -128,6 +130,26 @@ def test_the_trade_table_names_the_symbol_of_every_row(capsys):
     assert "2 sembol" in out
     assert "hâlâ açık" in out and "sonuçlara girmiyor" in out
     assert "$1800" in out  # both held at once: the peak, not the larger single collateral
+
+
+def test_an_early_close_prints_what_it_was_bought_back_at(capsys):
+    """Held to expiry the exit date repeats the expiry, so the column only shows up when it differs."""
+    from csp.backtest import replay_stats
+
+    trades = [
+        trade("NOK", "2026-01-05", "2026-02-06", 20.0, exit="2026-01-19", settle=None, buyback=0.05),
+        trade("SOFI", "2026-01-05", "2026-02-06", 64.0),
+    ]
+    print_trades(trades, replay_stats(trades))
+    out = capsys.readouterr().out
+
+    assert "çıkış" in out and "2026-01-19" in out
+    assert "↩0.05" in out
+    assert "1 pozisyon kâr hedefiyle erken kapatıldı" in out and "1 tanesi vadeye taşındı" in out
+
+    print_trades([trades[1]], replay_stats([trades[1]]))
+    plain = capsys.readouterr().out
+    assert "çıkış" not in plain and "erken kapatıldı" not in plain
 
 
 def test_the_panel_line_fits_a_narrow_terminal(row, history):

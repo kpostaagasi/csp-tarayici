@@ -212,14 +212,103 @@ def test_trades_come_back_in_settlement_order(tmp_path, history):
 
 
 def test_peak_committed_counts_overlap_not_the_biggest_single_trade(tmp_path):
-    def trade(entry, exp, collat):
-        return dict(entry=entry, exp=exp, collat=collat)
+    def trade(entry, exit_, collat):
+        return dict(entry=entry, exit=exit_, collat=collat)
 
     overlapping = [trade("2026-01-05", "2026-02-06", 900), trade("2026-01-06", "2026-02-06", 950)]
     assert peak_committed(overlapping) == 1850
 
     sequential = [trade("2026-01-05", "2026-02-06", 900), trade("2026-02-06", "2026-03-13", 950)]
     assert peak_committed(sequential) == 950  # the release is applied before the same-day entry
+
+
+# --------------------------------------------------------------- closing early on a profit target
+TP_ROWS = (
+    # date, exp, strike, bid, ask, delta
+    ("2026-01-05", "2026-02-06", 9.5, 0.40, 0.42, -0.30),  # sold at the bid, $950 tied up
+    ("2026-01-12", "2026-02-06", 9.5, 0.10, 0.12, -0.05),  # 70% of the credit is already gone
+    ("2026-01-12", "2026-02-06", 9.0, 0.20, 0.21, -0.20),  # only affordable once the $950 is back
+)
+
+
+def quotes_db(tmp_path, rows=TP_ROWS, sym="T"):
+    """A chain store written quote by quote, so a contract can be made to decay over days."""
+    db = tmp_path / "chains.db"
+    with snap_db(db) as con:
+        for date, exp, strike, bid, ask, delta in rows:
+            con.execute(
+                "insert or replace into puts values (?,?,?,?,?,?,?,?,?,?)",
+                (date, sym, exp, strike, bid, ask, 50.0, delta, 500.0, 10.0),
+            )
+    return db
+
+
+def test_a_profit_target_buys_the_contract_back_at_the_recorded_ask(tmp_path, history):
+    """Entry at the recorded bid, exit at the recorded ask: both fills existed on the tape."""
+    dated_history(history)
+    trades, still_open = replay("T", Filters(capital=1000), path=quotes_db(tmp_path), take_profit=0.5)
+
+    assert still_open == []
+    closed, held = trades  # resolution order: the buyback pays out four weeks before the expiry
+    assert (closed["strike"], closed["exit"], closed["buyback"], closed["settle"]) == (
+        9.5,
+        "2026-01-12",
+        0.12,
+        None,  # never assigned: the position was gone before expiry
+    )
+    assert abs(closed["pl"] - (0.40 - 0.12) * 100) < 1e-9
+    assert (held["strike"], held["entry"], held["exit"]) == (9.0, "2026-01-12", "2026-02-06")
+    assert (held["settle"], held["buyback"]) == (9.2, None)
+    assert abs(held["pl"] - 20.0) < 1e-9  # 9.00 was never breached
+
+
+def test_without_a_target_the_same_book_holds_to_expiry(tmp_path, history):
+    """The contrast the flag exists to measure: same quotes, one decision rule apart."""
+    dated_history(history)
+    trades, _ = replay("T", Filters(capital=1000), path=quotes_db(tmp_path))
+
+    assert [(t["strike"], t["exit"], t["buyback"]) for t in trades] == [(9.5, "2026-02-06", None)]
+    assert abs(trades[0]["pl"] - 10.0) < 1e-9  # assigned 0.30 deep instead of banked at 0.12
+    assert replay_stats(trades)["early"] == 0
+
+
+def test_a_target_the_premium_never_reaches_changes_nothing(tmp_path, history):
+    dated_history(history)
+    trades, _ = replay("T", Filters(capital=1000), path=quotes_db(tmp_path), take_profit=0.8)
+    assert [(t["exit"], t["buyback"]) for t in trades] == [("2026-02-06", None)]  # 0.12 > 0.08
+
+
+def test_a_target_needs_a_quote_to_hit(tmp_path, history):
+    """No offer on the book is not a free buyback: with no ask there is no trade to make."""
+    rows = (TP_ROWS[0], ("2026-01-12", "2026-02-06", 9.5, 0.0, 0.0, -0.05))
+    dated_history(history)
+    trades, _ = replay("T", Filters(capital=1000), path=quotes_db(tmp_path, rows), take_profit=0.5)
+    assert [(t["exit"], t["buyback"]) for t in trades] == [("2026-02-06", None)]
+
+
+def test_a_contract_closed_today_is_not_re_sold_today(tmp_path, history):
+    """Paying the ask and taking the bid back the same day is the spread, not a trade."""
+    rows = (
+        TP_ROWS[0],
+        ("2026-01-12", "2026-02-06", 9.5, 0.15, 0.16, -0.20),  # still inside every hard cut
+    )
+    dated_history(history)
+    trades, still_open = replay("T", Filters(capital=1000), path=quotes_db(tmp_path, rows), take_profit=0.5)
+    assert still_open == []
+    assert [(t["exit"], t["buyback"]) for t in trades] == [("2026-01-12", 0.16)]
+
+
+def test_an_early_close_frees_its_collateral_on_the_day_it_closes(tmp_path, history):
+    """The point of the rule is the cash, so the portfolio arithmetic has to follow the exit."""
+    dated_history(history)
+    trades, _ = replay("T", Filters(capital=1000), path=quotes_db(tmp_path), take_profit=0.5)
+    s = replay_stats(trades)
+
+    assert (s["n"], s["early"], s["assigned"], s["wins"]) == (2, 1, 0.0, 1.0)
+    assert s["tied"] == 950.0  # sequential: the second entry is funded by the first's buyback
+    assert (s["days"], s["deployed"]) == (32, 7 + 25)  # days actually held, not the two DTEs
+    assert abs(s["total"] - 48.0) < 1e-9
+    assert (s["first"], s["last"]) == ("2026-01-05", "2026-02-06")
 
 
 # ------------------------------------------------------------------------ recording a session

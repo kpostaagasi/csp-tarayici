@@ -56,16 +56,26 @@ def parse(argv=None):
         metavar="N",
         help="--replay sırasında aynı sembolde en fazla kaç açık pozisyon (varsayılan 1)",
     )
+    ap.add_argument(
+        "--take-profit",
+        type=float,
+        metavar="0-1",
+        help="--replay sırasında primin bu kadarı kazanılınca kaydedilen ask'ten geri al ve "
+        "nakdi serbest bırak (örn. 0.5 = yarı kâr); yoksa her kontrat vadeye taşınır",
+    )
     ap.add_argument("--version", action="version", version=f"csp {__version__}")
-    return ap.parse_args(argv)
+    a = ap.parse_args(argv)
+    if a.take_profit is not None and not 0 < a.take_profit < 1:
+        ap.error("--take-profit 0 ile 1 arasında olmalı (0.5 = primin yarısı kalınca kapat)")
+    return a
 
 
 ALL = {"TÜMÜ", "TUMU", "ALL"}
 
 
-def run_replay(spec, f, max_per_sym=1):
+def run_replay(spec, f, max_per_sym=1, take_profit=None):
     syms = None if spec.strip().upper() in ALL else [s for s in spec.upper().split(",") if s.strip()]
-    trades, still_open = replay(syms, f, max_per_sym=max_per_sym)
+    trades, still_open = replay(syms, f, max_per_sym=max_per_sym, take_profit=take_profit)
     stats = replay_stats(trades, still_open)
     if not stats:
         who = "TÜMÜ" if syms is None else ",".join(syms)
@@ -138,7 +148,7 @@ def dispatch(argv=None):
     f = Filters(capital=a.capital, allow_earnings=a.allow_earnings, min_iv_rank=a.min_iv_rank)
 
     if a.replay:
-        return run_replay(a.replay, f, a.max_per_symbol)
+        return run_replay(a.replay, f, a.max_per_symbol, a.take_profit)
 
     tickers = [t.upper() for t in a.tickers] or (
         universe(a.capital, a.universe) if a.universe else load_watchlist()

@@ -49,6 +49,12 @@ HDR_TRADES = (
     f"{'sym':<5} {'giriş':>10} {'vade':>10} {'dte':>4} {'strike':>7} {'prim':>6} {'spot':>7} "
     f"{'uzlaşma':>8} {'skor':>5} {'P&L$':>7}"
 )
+# The exit-date column only appears once a book actually has an early close in it: with every
+# contract held to expiry it would repeat the `vade` column in ten characters of noise.
+HDR_TRADES_EARLY = (
+    f"{'sym':<5} {'giriş':>10} {'vade':>10} {'çıkış':>10} {'dte':>4} {'strike':>7} {'prim':>6} "
+    f"{'spot':>7} {'uzlaşma':>8} {'skor':>5} {'P&L$':>7}"
+)
 
 
 def usd(v):
@@ -119,19 +125,31 @@ def explain(row, px=None):
     return out
 
 
+def trade_line(t, early):
+    """One resolved contract. `uzlaşma` is the underlying's expiry close, or the buyback price.
+
+    Both are what the position was closed against, so they share a column; `↩` is what says
+    which of the two you are reading, and it is only ever printed next to a price paid.
+    """
+    when = f" {t['exit']:>10}" if early else ""
+    out = f"↩{t['buyback']:.2f}" if t["buyback"] is not None else f"{t['settle']:.2f}"
+    return (
+        f"{t['sym']:<5} {t['entry']:>10} {t['exp']:>10}{when} {t['dte']:>4} {t['strike']:>7.2f} "
+        f"{t['credit']:>6.2f} {t['spot']:>7.2f} {out:>8} {t['score']:>5} {t['pl']:>+7.0f}"
+    )
+
+
 def print_trades(trades, stats, still_open=()):
-    """Settled trades in expiry order, then the portfolio's own numbers.
+    """Resolved trades in the order their cash arrived, then the portfolio's own numbers.
 
     The rows are the equity curve: they are ordered the way the cash actually arrived, not the
     way the positions were opened, because with several contracts running at once those differ.
+    A position bought back early resolves on its buyback day, not on its expiry.
     """
-    print(HDR_TRADES)
+    early = any(t["buyback"] is not None for t in trades)
+    print(HDR_TRADES_EARLY if early else HDR_TRADES)
     for t in trades:
-        print(
-            f"{t['sym']:<5} {t['entry']:>10} {t['exp']:>10} {t['dte']:>4} {t['strike']:>7.2f} "
-            f"{t['credit']:>6.2f} {t['spot']:>7.2f} {t['settle']:>8.2f} {t['score']:>5} "
-            f"{t['pl']:>+7.0f}"
-        )
+        print(trade_line(t, early))
     s = stats
     print(
         f"\n{s['n']} işlem · {s['syms']} sembol · {s['first']} → {s['last']} · {s['days']} takvim günü"
@@ -142,6 +160,11 @@ def print_trades(trades, stats, still_open=()):
         f"kazanan %{s['wins'] * 100:.0f} · atanan %{s['assigned'] * 100:.0f} · "
         f"en kötü seri {usd(s['drawdown'])} · aynı anda bloke edilen tepe ${s['tied']:.0f}"
     )
+    if s["early"]:
+        print(
+            f"{s['early']} pozisyon kâr hedefiyle erken kapatıldı (↩ = kaydedilen ask'ten geri "
+            f"alım) · {s['n'] - s['early']} tanesi vadeye taşındı"
+        )
     print(f"tepe teminata göre yıllık %{s['ann'] * 100:.1f}  (boşta geçen günler dahil)")
     for p in still_open:
         print(
