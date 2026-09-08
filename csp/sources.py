@@ -141,3 +141,17 @@ def recorded_ivs(sym, path=None, dte=None, delta=None):
     with snap_db(path) as con:
         sql = f"select date, iv from puts where {' and '.join(where)} order by date"
         return con.execute(sql, args).fetchall()
+
+
+def session_date(d):
+    """The trading session a chain payload actually describes, or None.
+
+    The envelope's own `timestamp` is just when the vendor rendered the JSON — it says today
+    even when the market was shut. `last_trade_time` on the underlying is the session the
+    quotes come from, which on a holiday or before the open is the previous one.
+    """
+    stamp = (d.get("last_trade_time") or "")[:10]
+    try:
+        return dt.date.fromisoformat(stamp)
+    except ValueError:
+        return None

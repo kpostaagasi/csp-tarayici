@@ -20,7 +20,7 @@ from .score import (
     realized_vol,
     score_contract,
 )
-from .sources import chain, close_on, known_closes
+from .sources import chain, close_on, known_closes, session_date
 
 
 # ------------------------------------------------------------------ path-based EV, no new data
@@ -66,29 +66,46 @@ def ev(row):
 
 # --------------------------------------------------- recording chains, so a real backtest exists
 def snapshot(tickers, max_dte=70, path=None):
-    """Append today's put chains to a local SQLite.
+    """Append the latest session's put chains to a local SQLite. Returns (rows, session date).
 
     Free vendors do not cover the names a small account can sell (measured: DoltHub's 2019+
     chain set has MARA but not SOFI/PLUG/NOK, and its SQL endpoint answers in ~45s). We already
     download these chains to score them, so keeping them is the only free way to own real
     option history: one row per (date, sym, expiration, strike), quotes exactly as recorded.
+
+    Rows are stamped with the session the quotes came from, not the calendar day the job ran.
+    That distinction is the whole difference between a usable history and a corrupt one: run on
+    a market holiday, or before the open, and the vendor serves the previous session — stamping
+    it "today" would invent a day in the IV rank series and an entry date the replay would trade
+    on. Stamped by session, the same quotes land on the same primary key and the write is an
+    idempotent no-op instead.
     """
-    today = dt.date.today()
-    rows = []
+    chains = []
     for t in tickers:
         try:
             d = chain(t)
         except Exception:
             continue  # a dead ticker must not abort the day's recording
+        chains.append((t.upper(), d))
+
+    dates = [d for _, c in chains if (d := session_date(c))]
+    if not dates:
+        return 0, None  # no vendor timestamp anywhere: a payload change, not a holiday
+    # one date for the whole run: replay() treats each recorded date as one decision point, so a
+    # snapshot split across sessions would hand it a half-populated universe on both of them.
+    session = max(dates)
+
+    rows = []
+    for sym, d in chains:
         spot = d["close"] or d["current_price"]
         for o in d["options"]:
             exp, cp, strike = parse_occ(o["option"])
-            if cp != "P" or not 0 <= (exp - today).days <= max_dte:
+            if cp != "P" or not 0 <= (exp - session).days <= max_dte:
                 continue
             rows.append(
                 (
-                    today.isoformat(),
-                    t.upper(),
+                    session.isoformat(),
+                    sym,
                     exp.isoformat(),
                     strike,
                     o["bid"],
@@ -102,7 +119,7 @@ def snapshot(tickers, max_dte=70, path=None):
     con = snap_db(path)
     with con:
         con.executemany("insert or replace into puts values (?,?,?,?,?,?,?,?,?,?)", rows)
-    return len(rows)
+    return len(rows), session
 
 
 def recorded_symbols(path=None):

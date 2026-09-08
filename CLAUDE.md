@@ -83,6 +83,11 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
   so a caller that does not think in portfolios cannot get it wrong.
 - **`Filters` is one mutable object** flowing CLI → scan → TUI → backtest. TUI keys mutate it
   in place and rescan.
+- **`snapshot()` stamps rows with the vendor's session, not `date.today()`** — derived from the
+  underlying's `last_trade_time` (the envelope's own `timestamp` says today even on a holiday).
+  One date for the whole run, since `replay()` treats a date as one decision point. This is what
+  makes an unattended daily job idempotent: a holiday re-records the same session onto the same
+  primary key instead of inventing a day in the IV series. No timestamp anywhere → record nothing.
 - **No lookahead in `replay()`**: realized vol is computed with `realized_vol(sym, before=date)`,
   and entries only ever see that day's recorded quotes. A contract whose expiry has not passed
   (`close_on()` → `None`) stays in `still_open` and is never counted — settlement may reach past

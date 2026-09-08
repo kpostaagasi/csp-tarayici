@@ -1,9 +1,10 @@
 """Both backtests: the path-based EV and the replay of recorded chains."""
 
 import dataclasses
+import datetime as dt
 
-from csp.backtest import backtest, ev, peak_committed, replay, replay_stats, snap_db
-from csp.score import Filters
+from csp.backtest import backtest, ev, peak_committed, replay, replay_stats, snap_db, snapshot
+from csp.score import Filters, occ
 
 
 def contract(row, **over):
@@ -219,3 +220,113 @@ def test_peak_committed_counts_overlap_not_the_biggest_single_trade(tmp_path):
 
     sequential = [trade("2026-01-05", "2026-02-06", 900), trade("2026-02-06", "2026-03-13", 950)]
     assert peak_committed(sequential) == 950  # the release is applied before the same-day entry
+
+
+# ------------------------------------------------------------------------ recording a session
+EXP = dt.date(2026, 10, 16)  # ~6 weeks after the recorded session, so max_dte keeps it
+
+
+def payload(last_trade, strikes=(9.0, 9.5), exp=EXP, spot=10.0):
+    return {
+        "close": spot,
+        "current_price": spot,
+        "last_trade_time": last_trade,
+        "options": [
+            {
+                "option": occ("T", exp, k),
+                "bid": 0.20,
+                "ask": 0.22,
+                "iv": 0.50,
+                "delta": -0.25,
+                "open_interest": 500,
+            }
+            for k in strikes
+        ],
+    }
+
+
+def vendor(monkeypatch, by_sym):
+    monkeypatch.setattr("csp.backtest.chain", lambda t: by_sym[t.upper()])
+
+
+def rows_in(db):
+    with snap_db(db) as con:
+        return con.execute("select date, sym, strike from puts order by date, strike").fetchall()
+
+
+def test_rows_carry_the_session_the_quotes_came_from_not_the_day_the_job_ran(tmp_path, monkeypatch):
+    """Labor Day: the cron fires on the 8th and the vendor is still serving the 4th."""
+    vendor(monkeypatch, {"T": payload("2026-09-04T15:59:59")})
+    db = tmp_path / "chains.db"
+    n, session = snapshot(["T"], path=db)
+
+    assert (n, session) == (2, dt.date(2026, 9, 4))
+    assert {r[0] for r in rows_in(db)} == {"2026-09-04"}  # not today, whenever today is
+
+
+def test_re_recording_a_stale_session_is_a_no_op_not_a_second_day(tmp_path, monkeypatch):
+    """The bug this pins: a holiday used to add a fake day to the IV series every time it ran."""
+    vendor(monkeypatch, {"T": payload("2026-09-04T15:59:59")})
+    db = tmp_path / "chains.db"
+    snapshot(["T"], path=db)
+    snapshot(["T"], path=db)  # Tuesday's run, vendor still on Friday
+    snapshot(["T"], path=db)  # and again
+
+    assert len(rows_in(db)) == 2  # two strikes, one session, however many times it ran
+    with snap_db(db) as con:
+        assert con.execute("select count(distinct date) from puts").fetchone()[0] == 1
+
+
+def test_one_run_records_one_session_even_if_a_symbol_lags(tmp_path, monkeypatch):
+    """replay() treats a date as one decision point, so a split run would half-populate two."""
+    vendor(
+        monkeypatch,
+        {
+            "T": payload("2026-09-04T15:59:59"),
+            "U": payload("2026-08-28T15:59:59", strikes=(9.0,)),  # halted for a week
+        },
+    )
+    db = tmp_path / "chains.db"
+    n, session = snapshot(["T", "U"], path=db)
+    assert (n, session) == (3, dt.date(2026, 9, 4))
+    assert {r[0] for r in rows_in(db)} == {"2026-09-04"}
+
+
+def test_dte_is_measured_from_the_session_not_from_today(tmp_path, monkeypatch):
+    far = dt.date(2026, 9, 4) + dt.timedelta(days=80)
+    near = dt.date(2026, 9, 4) + dt.timedelta(days=60)
+    monkeypatch.setattr(
+        "csp.backtest.chain",
+        lambda t: {
+            "close": 10.0,
+            "current_price": 10.0,
+            "last_trade_time": "2026-09-04T15:59:59",
+            "options": [
+                o
+                for e in (near, far)
+                for o in payload("2026-09-04T15:59:59", strikes=(9.0,), exp=e)["options"]
+            ],
+        },
+    )
+    db = tmp_path / "chains.db"
+    n, _ = snapshot(["T"], max_dte=70, path=db)
+    assert n == 1  # the 80-day expiry is out, the 60-day one is in
+
+
+def test_a_payload_with_no_timestamp_records_nothing(tmp_path, monkeypatch):
+    """Guessing a date here is exactly the failure the session stamp exists to prevent."""
+    vendor(monkeypatch, {"T": payload("")})
+    db = tmp_path / "chains.db"
+    assert snapshot(["T"], path=db) == (0, None)
+
+
+def test_a_dead_ticker_does_not_abort_the_run(tmp_path, monkeypatch):
+    def flaky(t):
+        if t.upper() == "DEAD":
+            raise RuntimeError("404")
+        return payload("2026-09-04T15:59:59")
+
+    monkeypatch.setattr("csp.backtest.chain", flaky)
+    db = tmp_path / "chains.db"
+    n, session = snapshot(["DEAD", "T"], path=db)
+    assert n == 2 and session == dt.date(2026, 9, 4)

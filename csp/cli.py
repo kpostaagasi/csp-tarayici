@@ -1,6 +1,7 @@
 """Argument parsing and the one-shot table. Everything else lives in a module of its own."""
 
 import argparse
+import datetime as dt
 import json
 import sys
 
@@ -81,9 +82,14 @@ def run_replay(spec, f, max_per_sym=1):
 
 
 def run_snapshot(tickers):
-    n = snapshot(tickers)
+    """The unattended path: a cron log has to say which session was recorded, not just how many."""
+    n, session = snapshot(tickers)
+    if session is None:
+        sys.exit("hiçbir sembolde seans zaman damgası yok — vendor yanıtı değişmiş olabilir")
     rows, days, syms = recorded()
-    print(f"{n} satır yazıldı · defter: {rows} satır / {days} gün / {syms} sembol → {CHAINS}")
+    stale = "" if session == dt.date.today() else "  ⚠ bugün değil (piyasa kapalı / seans açılmadı)"
+    print(f"{n} satır yazıldı · seans {session}{stale}")
+    print(f"defter: {rows} satır / {days} gün / {syms} sembol → {CHAINS}")
 
 
 def run_scan(tickers, a, f):

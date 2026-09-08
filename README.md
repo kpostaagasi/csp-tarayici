@@ -208,12 +208,71 @@ Bu defter aynı zamanda `IVR` kolonunun tek kaynağı: ne kadar uzun kaydedersen
 anlamlı.
 
 `~/.csp_chains.db` (SQLite): `puts(date, sym, exp, strike, bid, ask, iv, delta, oi, spot)`,
-PK `(date, sym, exp, strike)`, DTE ≤ 70 olan putlar. Her gün bir kez çalıştır — piyasa
-kapandıktan sonra, çünkü CBOE verisi gecikmeli:
+PK `(date, sym, exp, strike)`, DTE ≤ 70 olan putlar.
+
+**Satırlar işin koştuğu takvim gününe değil, kotasyonların geldiği seansa damgalanıyor.** CBOE
+tatilde ya da açılıştan önce bir önceki seansı servis ediyor; onu "bugün" diye kaydetmek IV rank
+serisine uydurma bir gün, `--replay`'e uydurma bir giriş tarihi yazardı. Seansa damgalanınca aynı
+kotasyonlar aynı birincil anahtara düşüyor ve tekrar çalıştırmak zararsız bir no-op oluyor:
 
 ```
-# crontab -e  (hafta içi 18:10)
-10 18 * * 1-5 csp --universe --snapshot >> ~/.csp_snap.log 2>&1
+$ csp NOK SOFI --snapshot
+437 satır yazıldı · seans 2026-09-04  ⚠ bugün değil (piyasa kapalı / seans açılmadı)
+defter: 437 satır / 1 gün / 2 sembol → ~/.csp_chains.db
+```
+
+### Günlük kayıt işi
+
+Damga seanstan geldiği için **saati tutturmak zorunda değilsin**: geç kalmış ya da ertesi sabah
+koşan bir iş de doğru seansı doğru tarihe yazar. En kolay tarifi bu: ABD kapanışını beklemek
+yerine hafta içi her sabah koştur — Pazartesi sabahı Cuma'yı, Salı sabahı Pazartesi'yi alır,
+beş seansın beşi de yakalanır. ABD dışındaki bir saat diliminde bu, kapanış saatini yerel saate
+çevirmekten hem basit hem sağlam.
+
+**macOS (launchd — önerilen).** `cron` Mac uykudayken çalışmaz ve kaçan gün kalıcı olarak
+kaybolur; `launchd` kaçırdığı işi uyanınca koşturur. `~/Library/LaunchAgents/csp-snapshot.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>csp-snapshot</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/csp</string>   <!-- `which csp` ne diyorsa: cron/launchd PATH'i dar -->
+    <string>--universe</string>
+    <string>--capital</string><string>2000</string>
+    <string>--snapshot</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>9</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>9</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>9</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>9</integer></dict>
+  </array>
+  <key>StandardOutPath</key><string>/Users/KULLANICI/.csp_snap.log</string>
+  <key>StandardErrorPath</key><string>/Users/KULLANICI/.csp_snap.log</string>
+</dict>
+</plist>
+```
+
+plist `~` genişletmiyor, log yollarını tam yaz. Sonra:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/csp-snapshot.plist
+launchctl kickstart -p gui/$(id -u)/csp-snapshot   # beklemeden bir kez koştur
+tail ~/.csp_snap.log                               # hangi seans kaydedildi
+launchctl bootout gui/$(id -u)/csp-snapshot        # kaldırmak için
+```
+
+**Linux (cron).** Buradaki asıl tuzak PATH: cron `csp`'yi bulamaz, tam yol şart.
+
+```
+# crontab -e  (hafta içi 09:00)
+0 9 * * 1-5 /usr/local/bin/csp --universe --snapshot >> ~/.csp_snap.log 2>&1
 ```
 
 Toplu veri satın alırsan (OptionsDX/dolt) aynı 10 kolonluk tabloya yükle; `--replay` fark etmez.

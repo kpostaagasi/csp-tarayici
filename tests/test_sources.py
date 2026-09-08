@@ -178,3 +178,13 @@ def test_the_screener_is_one_request_a_day(monkeypatch):
     sources.us_stocks()
     assert len(log) == 1
     assert json.loads(sources.UNIV.read_text())["at"] == dt.date.today().isoformat()
+
+
+# ------------------------------------------------------------------------------- session date
+def test_the_session_is_read_from_the_last_trade_not_the_envelope():
+    """The envelope's timestamp says today even on a holiday; the last trade tells the truth."""
+    assert sources.session_date({"last_trade_time": "2026-09-04T15:59:59"}) == dt.date(2026, 9, 4)
+    assert sources.session_date({"last_trade_time": ""}) is None
+    assert sources.session_date({"last_trade_time": None}) is None
+    assert sources.session_date({}) is None
+    assert sources.session_date({"last_trade_time": "n/a"}) is None
