@@ -1,40 +1,47 @@
 # csp-tarayici
 
-Cash-secured put tarayıcı: CBOE zinciri + gerçekleşen oynaklık + kazanç takvimi, tek dosya,
-stdlib-only (`curses` dahil), **API key yok**. Terminal TUI'si, düz Türkçe açıklama paneli ve
-kendi kaydettiği zincirlerle çalışan gerçek bir backtest motoru var.
+Cash-secured put tarayıcı: CBOE zinciri + gerçekleşen oynaklık + kazanç takvimi,
+stdlib-only çalışma zamanı (`curses` dahil), **API key yok**. Terminal TUI'si, düz Türkçe
+açıklama paneli ve kendi kaydettiği zincirlerle çalışan gerçek bir backtest motoru var.
 
 > Cash-secured put scanner for small accounts: CBOE delayed chains, variance-risk-premium
-> scoring, curses TUI, self-recorded option-chain history for real backtests. Single file,
-> Python standard library only, no API keys. Turkish UI.
+> scoring, curses TUI, self-recorded option-chain history for real backtests. Python
+> standard library only at runtime, no API keys. Turkish UI.
 
 ## Kurulum
 
 ```bash
 brew trust kpostaagasi/csp                    # Homebrew 6+ üçüncü taraf tap'ler için şart
 brew install kpostaagasi/csp/csp-tarayici
-csp --universe --tui
 ```
 
-Ya da klonla — tek dosya, bağımlılık yok:
+Ya da PyPI'dan (paket yayınlandıktan sonra geçerli):
+
+```bash
+uv tool install csp-tarayici
+# veya
+pipx install csp-tarayici
+```
+
+Ya da kaynaktan:
 
 ```bash
 git clone https://github.com/kpostaagasi/csp-tarayici && cd csp-tarayici
-python3 csp.py --selftest
+pip install -e ".[dev]"
+pytest
 ```
 
-Python 3.10+ (`curses`, `sqlite3` stdlib'de). Aşağıdaki örneklerde `csp` = `python3 csp.py`.
+Python 3.10+ (`curses`, `sqlite3` stdlib'de). Kurulumdan sonra komut adı `csp`.
 
 ```bash
-python3 csp.py --universe --tui                  # sermayeyle alınabilen en işlek 60 ABD hissesi
-python3 csp.py --universe 150 --capital 5000     # evreni büyüt (ilk tarama ~N/0.4 saniye)
-python3 csp.py --tui NOK F MARA SOFI RIOT ETHA   # elle liste: ilk sefer kaydedilir
-python3 csp.py --tui                             # sonrası: kayıtlı listeyle açılır
-python3 csp.py NOK SOFI --capital 2000           # tek seferlik tablo
-python3 csp.py NOK SOFI --explain                # her satırın altına düz Türkçe okuma
-python3 csp.py --selftest
-python3 csp.py --universe --snapshot             # bugünün put zincirlerini diske yaz (günlük cron)
-python3 csp.py --replay NOK --capital 2000       # kayıtlı zincirlerle gerçek backtest
+csp --universe --tui                  # sermayeyle alınabilen en işlek 60 ABD hissesi
+csp --universe 150 --capital 5000     # evreni büyüt (ilk tarama ~N/0.4 saniye)
+csp --tui NOK F MARA SOFI RIOT ETHA   # elle liste: ilk sefer kaydedilir
+csp --tui                             # sonrası: kayıtlı listeyle açılır
+csp NOK SOFI --capital 2000           # tek seferlik tablo
+csp NOK SOFI --explain                # her satırın altına düz Türkçe okuma
+csp --universe --snapshot             # bugünün put zincirlerini diske yaz (günlük cron)
+csp --replay NOK --capital 2000       # kayıtlı zincirlerle gerçek backtest
 ```
 
 TUI tuşları: `?` **yardım — her kolonun ne demek olduğu** · `↑↓`/`jk` gezin ·
@@ -51,6 +58,32 @@ Ekranın alt dördü seçili kontratın düz okuması: prim, bloke nakit, atama 
 fiyat, piyasanın vadeye kadar beklediği hareket ve skorun hangi bileşenden geldiği. Aynı metin
 CLI'da `--explain` ile geliyor. Kolon seti terminal genişliğine göre kırpılıyor: önce `yld/liq/vrp`,
 sonra `spot/exp/OI/RV30/sprd%` düşer; `sym strike dte ROC%y cush score` asla düşmez.
+
+## Yapı
+
+Paket artık tek dosya değil, `csp/` altında modüllere ayrıldı:
+
+| Modül | Sorumluluk |
+|---|---|
+| `csp/http.py` | Rate-gate'li HTTP istekleri |
+| `csp/cache.py` | Disk cache (kilitli yazma) |
+| `csp/sources.py` | CBOE opsiyon zinciri + günlük barlar, Nasdaq kazanç tarihi + screener |
+| `csp/score.py` | `Filters`/`Candidate`, skor bileşenleri, paralel tarama |
+| `csp/universe.py` | Sermayeye göre evren seçimi |
+| `csp/backtest.py` | EV$ (geçmiş testi), zincir kaydı (`--snapshot`), `--replay` |
+| `csp/render.py` | Genişliğe uyan kolonlar, açıklama paneli |
+| `csp/tui.py` | curses arayüz |
+| `csp/cli.py` | argparse giriş noktası (`csp` komutu) |
+
+Filtreler artık dosyanın başında global sabitler değil, `Filters` dataclass'ı olarak taşınıyor.
+
+## Neden bağımlılık yok
+
+Darboğaz CBOE'nin ~0.4 istek/sn hız sınırı — bir HTTP kütüphanesi (requests/httpx) burada
+zaman kazandırmıyor, kazandıran şey rate gate. Hesap tarafındaki iş milisaniye altı; numpy/pandas
+gerekçesi yok. `curses` zaten full-screen TUI veriyor: Textual/Rich gibi bir kütüphane 15 MB'lık
+bağımlılıkla ~40 satırlık kaydırma/kolon kırpma kodunu değiştirirdi, kazanç orantısız yok.
+Geliştirme tarafında `pytest` ve `ruff` var — ikisi de çalışma zamanına girmiyor.
 
 ## Evren
 
@@ -95,8 +128,8 @@ score = 100 × (0.35·vrp + 0.25·liq + 0.20·yield + 0.20·cushion)
   dağılımı bu, ATM'in değil).
 
 Sert filtreler: DTE 21–45, |delta| 0.15–0.35, spread ≤ %10, OI ≥ 25, teminat ≤ `--capital`,
-vade içinde kazanç varsa ele (`--allow-earnings` kapatır). Ağırlıklar ve eşikler dosyanın
-başındaki sabitlerde; asıl ayar düğmesi orası.
+vade içinde kazanç varsa ele (`--allow-earnings` kapatır). Ağırlıklar ve eşikler `Filters`
+dataclass'ının başındaki sabitlerde; asıl ayar düğmesi orası.
 
 Skor bir önsav, kanıt değil. IV ileriye, RV30 geriye bakar; son ay sert hareket olduysa `vrp`
 bileşeni bastırılır. Skorun ne dediğini `EV$` ile karşılaştır: yüksek skor + eksi EV$, "primi
@@ -142,7 +175,7 @@ Sonuç: küçük/orta sermaye evreni için bedava ve tam kapsamlı geçmiş zinc
 zincirleri skorlamak için **zaten indiriyoruz** — atmak yerine kaydetmek yeterli.
 
 ```bash
-python3 csp.py --universe --snapshot     # ~1200 satır/gün, 60 sembolde ~3 MB/ay
+csp --universe --snapshot     # ~1200 satır/gün, 60 sembolde ~3 MB/ay
 ```
 
 `~/.csp_chains.db` (SQLite): `puts(date, sym, exp, strike, bid, ask, iv, delta, oi, spot)`,
@@ -151,7 +184,7 @@ kapandıktan sonra, çünkü CBOE verisi gecikmeli:
 
 ```
 # crontab -e  (hafta içi 18:10)
-10 18 * * 1-5 cd ~/GitHub/csp-tarayici && /usr/bin/python3 csp.py --universe --snapshot >> ~/.csp_snap.log 2>&1
+10 18 * * 1-5 csp --universe --snapshot >> ~/.csp_snap.log 2>&1
 ```
 
 Toplu veri satın alırsan (OptionsDX/dolt) aynı 10 kolonluk tabloya yükle; `--replay` fark etmez.
@@ -201,5 +234,5 @@ büyük olabilir. Kendi kararını kendi paranla verirsin.
 
 ## Lisans
 
-MIT — bkz. [LICENSE](LICENSE). Katkı: PR'lar açık; tek kural, `python3 csp.py --selftest` yeşil
-kalsın ve yeni davranış kendi testini getirsin.
+MIT — bkz. [LICENSE](LICENSE). Katkı: PR'lar açık; tek kural, `pytest` yeşil kalsın ve yeni
+davranış kendi testini getirsin.

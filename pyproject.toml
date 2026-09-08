@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "csp-tarayici"
+dynamic = ["version"]
+description = "Cash-secured put scanner using CBOE options data with a curses TUI, no API keys required"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Kamil Postaagasi" },
+]
+keywords = ["options", "cash-secured-put", "cboe", "tui", "backtest", "finance"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console :: Curses",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+# Runtime dependencies are deliberately empty: stdlib only, measured and confirmed
+# no third-party package pays for itself against CBOE's ~0.4 req/s rate limit.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/kpostaagasi/csp-tarayici"
+Repository = "https://github.com/kpostaagasi/csp-tarayici"
+Issues = "https://github.com/kpostaagasi/csp-tarayici/issues"
+
+[project.scripts]
+csp = "csp.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.hatch.version]
+path = "csp/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["csp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["csp", "tests", "README.md", "LICENSE"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
