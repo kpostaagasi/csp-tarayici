@@ -6,16 +6,21 @@ from a model — the premium is always a quote that existed.
 """
 
 import datetime as dt
-import sqlite3
 from collections import Counter
 
-from .cache import CHAINS
-from .score import Candidate, occ, parse_occ, passes, realized_vol, score_contract
+from .cache import snap_db
+from .score import (
+    Candidate,
+    iv_levels,
+    iv_rank,
+    levels_upto,
+    occ,
+    parse_occ,
+    passes,
+    realized_vol,
+    score_contract,
+)
 from .sources import chain, close_on, known_closes
-
-DDL = """create table if not exists puts (
-  date text, sym text, exp text, strike real, bid real, ask real, iv real, delta real,
-  oi real, spot real, primary key (date, sym, exp, strike))"""
 
 
 # ------------------------------------------------------------------ path-based EV, no new data
@@ -60,12 +65,6 @@ def ev(row):
 
 
 # --------------------------------------------------- recording chains, so a real backtest exists
-def snap_db(path=None):
-    con = sqlite3.connect(path or CHAINS)
-    con.execute(DDL)
-    return con
-
-
 def snapshot(tickers, max_dte=70, path=None):
     """Append today's put chains to a local SQLite.
 
@@ -154,7 +153,8 @@ def replay(syms, f, path=None, max_per_sym=1):
     for r in rows:
         days.setdefault(r[0], []).append(r)
 
-    trades, open_pos, rv = [], [], {}
+    levels = {s: iv_levels(s, path) for s in syms}  # read once, then sliced per date below
+    trades, open_pos, rv, ivr = [], [], {}, {}
     for date in sorted(days):
         open_pos = [p for p in open_pos if not (p["exp"] <= date and _settle(p, trades))]
         free = f.capital - sum(p["collat"] for p in open_pos)
@@ -164,7 +164,11 @@ def replay(syms, f, path=None, max_per_sym=1):
         picks = []
         for _, sym, exp, strike, bid, ask, iv, delta, oi, spot in days[date]:
             dte = (dt.date.fromisoformat(exp) - today).days
-            if not passes(f, dte, strike, bid, ask, delta, oi, cash=free):
+            if (sym, date) not in ivr:
+                seen = levels_upto(levels[sym], date)  # the rank as it was knowable that day
+                today_level = seen[-1][1] if seen and seen[-1][0] == date else None
+                ivr[sym, date] = iv_rank(today_level, seen)[0]
+            if not passes(f, dte, strike, bid, ask, delta, oi, cash=free, iv_rank=ivr[sym, date]):
                 continue
             if (sym, date) not in rv:
                 rv[sym, date] = realized_vol(sym, before=date)  # only closes up to that day

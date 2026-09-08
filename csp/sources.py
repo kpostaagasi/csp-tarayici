@@ -2,9 +2,10 @@
 
 import bisect
 import datetime as dt
+import pathlib
 import re
 
-from .cache import EARNINGS, HIST, UNIV, cached, store
+from .cache import CHAINS, EARNINGS, HIST, UNIV, cached, snap_db, store
 from .http import get
 
 CHAIN_TTL = 600  # seconds; changing a filter must not re-download a chain
@@ -116,3 +117,27 @@ def us_stocks():
     store(UNIV, "at", dt.date.today().isoformat())
     store(UNIV, "rows", rows)
     return rows
+
+
+def recorded_ivs(sym, path=None, dte=None, delta=None):
+    """(date, iv) for every recorded put of `sym` inside the given DTE and |delta| bands.
+
+    The chain store is the only IV history that exists for these names — no free vendor sells
+    one — so it is read here alongside the vendors rather than pretended to be a live feed. The
+    bands are filtered in SQL because a year of one symbol's chains is tens of thousands of rows
+    and the TUI re-scans on every keypress; the caller owns what the bands are.
+    """
+    store_path = pathlib.Path(path or CHAINS)
+    if not store_path.exists():
+        return []  # reading must not conjure a database on a machine that never snapshots
+    where = ["sym = ?", "iv > 0"]
+    args = [sym.upper()]
+    if dte is not None:
+        where.append("julianday(exp) - julianday(date) between ? and ?")
+        args += list(dte)
+    if delta is not None:
+        where.append("abs(delta) between ? and ?")
+        args += list(delta)
+    with snap_db(path) as con:
+        sql = f"select date, iv from puts where {' and '.join(where)} order by date"
+        return con.execute(sql, args).fetchall()

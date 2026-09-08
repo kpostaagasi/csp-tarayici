@@ -21,6 +21,13 @@ def parse(argv=None):
     ap.add_argument("--capital", type=float, default=2000, help="bloke edilebilir nakit, $")
     ap.add_argument("--top", type=int, default=10, help="tabloda kaç satır")
     ap.add_argument("--allow-earnings", action="store_true", help="vade içi kazanç olsa da göster")
+    ap.add_argument(
+        "--min-iv-rank",
+        type=float,
+        metavar="0-1",
+        help="IV rank eşiği: kendi kaydettiğin geçmişe göre bu seviyenin altındakileri ele "
+        "(kaydı olmayan sembol de elenir)",
+    )
     ap.add_argument("--tui", action="store_true", help="etkileşimli curses arayüzü")
     ap.add_argument(
         "--universe",
@@ -122,7 +129,7 @@ def main(argv=None):
 
 def dispatch(argv=None):
     a = parse(argv)
-    f = Filters(capital=a.capital, allow_earnings=a.allow_earnings)
+    f = Filters(capital=a.capital, allow_earnings=a.allow_earnings, min_iv_rank=a.min_iv_rank)
 
     if a.replay:
         return run_replay(a.replay, f, a.max_per_symbol)

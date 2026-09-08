@@ -40,6 +40,7 @@ csp --tui NOK F MARA SOFI RIOT ETHA   # elle liste: ilk sefer kaydedilir
 csp --tui                             # sonrası: kayıtlı listeyle açılır
 csp NOK SOFI --capital 2000           # tek seferlik tablo
 csp NOK SOFI --explain                # her satırın altına düz Türkçe okuma
+csp --universe --min-iv-rank 0.5      # vol'ü kendi kaydettiğin aralığın üst yarısında olanlar
 csp --universe --snapshot             # bugünün put zincirlerini diske yaz (günlük cron)
 csp --replay NOK --capital 2000       # kayıtlı zincirlerle gerçek backtest
 csp --replay TÜMÜ --capital 5000      # kaydettiğin her sembol, tek portföy olarak
@@ -49,7 +50,7 @@ TUI tuşları: `?` **yardım — her kolonun ne demek olduğu** · `↑↓`/`jk`
 `enter` seçili ismin tüm geçen kontratları · `q` geri/çık ·
 `s` sıralama · `a`/`x` sembol ekle/çıkar ·
 `c` sermaye · `d` delta bandı · `t` DTE aralığı · `e` kazanç filtresi · `r` veriyi yenile.
-`s` sırası: score → **EV$ (geçmiş testi)** → ROC → IV → cushion → spread → DTE.
+`s` sırası: score → **EV$ (geçmiş testi)** → **IVR (IV rank)** → ROC → IV → cushion → spread → DTE.
 
 `r` dışındaki her düğme cache'lenmiş zincirleri yeniden filtreliyor: ağ yok, sonuç anında
 (5 sembolde 2.0 sn → 0.01 sn). `r` zincirleri sıfırlayıp yeniden çekiyor. `--universe`
@@ -133,8 +134,28 @@ score = 100 × (0.35·vrp + 0.25·liq + 0.20·yield + 0.20·cushion)
   dağılımı bu, ATM'in değil).
 
 Sert filtreler: DTE 21–45, |delta| 0.15–0.35, spread ≤ %10, OI ≥ 25, teminat ≤ `--capital`,
-vade içinde kazanç varsa ele (`--allow-earnings` kapatır). Ağırlıklar ve eşikler `Filters`
-dataclass'ının başındaki sabitlerde; asıl ayar düğmesi orası.
+vade içinde kazanç varsa ele (`--allow-earnings` kapatır), isteğe bağlı `--min-iv-rank`.
+Ağırlıklar ve eşikler `Filters` dataclass'ının başındaki sabitlerde; asıl ayar düğmesi orası.
+
+### IV rank (`IVR` kolonu) — skorun içinde değil, yanında
+
+`vrp` "IV, gerçekleşenin üstünde mi" diye sorar; IV rank "bu IV, bu sembolün kendi geçmişine
+göre nerede" diye sorar. Farklı bilgi: RV sakinken IV de sakinse `vrp` yüksek çıkabilir ama vol
+kendi aralığının dibindedir.
+
+Ücretsiz hiçbir yerde bu isimlerin IV geçmişi yok — ama `--snapshot` zaten her günün IV'sini
+kaydediyor. `IVR`, kayıtlı her gün için 21–45 DTE ve |delta| 0.10–0.50 bandındaki putların
+**medyan IV'si**ni alıp bugünkünü son 252 kayıtlı günün min–max aralığına yerleştiriyor.
+Bantlar `Filters`'a değil sabitlere bağlı: DTE düğmesini genişletmek her sembolü yeniden
+sıralasaydı, skor sabitlerinin kaçındığı tuzağa düşerdi.
+
+**Skora girmiyor, bilerek.** Girdisi "bu makinenin ne kadar süredir kaydettiği" — bir yıldır
+takip ettiğin sembolle dün eklediğin sembol farklı kanıtla puanlanırdı, oysa skorun bütün işi
+onları tek tabloda karşılaştırmak. O yüzden kolon, panel satırı, sıralama anahtarı ve isteğe
+bağlı filtre; ağırlık değil. 20 kayıtlı günden azsa `—` diyor, uydurmuyor.
+
+`--replay` sırasında rank o günün kendi bilgisiyle hesaplanıyor: kontratın girildiği güne kadar
+(o gün dahil, sonrası hariç) kaydedilenler — `realized_vol(before=...)` ile aynı kural.
 
 Skor bir önsav, kanıt değil. IV ileriye, RV30 geriye bakar; son ay sert hareket olduysa `vrp`
 bileşeni bastırılır. Skorun ne dediğini `EV$` ile karşılaştır: yüksek skor + eksi EV$, "primi
@@ -182,6 +203,9 @@ zincirleri skorlamak için **zaten indiriyoruz** — atmak yerine kaydetmek yete
 ```bash
 csp --universe --snapshot     # ~1200 satır/gün, 60 sembolde ~3 MB/ay
 ```
+
+Bu defter aynı zamanda `IVR` kolonunun tek kaynağı: ne kadar uzun kaydedersen IV rank o kadar
+anlamlı.
 
 `~/.csp_chains.db` (SQLite): `puts(date, sym, exp, strike, bid, ask, iv, delta, oi, spot)`,
 PK `(date, sym, exp, strike)`, DTE ≤ 70 olan putlar. Her gün bir kez çalıştır — piyasa
@@ -240,7 +264,7 @@ kayıtlı vadelerin hiçbiri henüz geçmedi.)
 Roll / erken kapatma / wheel (atanan hisseyi covered call'a çevirme) simülasyonu, toplu
 geçmiş zincir importer'ı
 (OptionsDX/dolt CSV → SQLite), pozisyon defteri/günlük, temel-iflas riski (Merton
-distance-to-default), faktör yoğunlaşma cezası, IV rank/percentile, otomatik yenileme.
+distance-to-default), faktör yoğunlaşma cezası, otomatik yenileme.
 `--replay` bugün yalnız kendi kaydettiğin günleri görüyor: geçmiş, kaydetmeye başladığın
 günden ileri doğru birikiyor.
 Evren taraması CBOE'nin hız sınırına takılı: kapı seri, paralellik yalnız indirmeleri

@@ -128,3 +128,18 @@ def test_the_trade_table_names_the_symbol_of_every_row(capsys):
     assert "2 sembol" in out
     assert "hâlâ açık" in out and "sonuçlara girmiyor" in out
     assert "$1800" in out  # both held at once: the peak, not the larger single collateral
+
+
+def test_the_panel_line_fits_a_narrow_terminal(row, history):
+    """Every panel line is clipped at the terminal width; an 80-column read must stay readable."""
+    history("SOFI", [18.0] * 400)
+    ranked = dataclasses.replace(row, iv_rank=0.82, iv_rank_n=143, ev_n=None)
+    lines = explain(ranked)
+    assert any("IV rank 0.82" in line for line in lines)
+    assert max(len(line) for line in lines) <= 110
+
+    thin = dataclasses.replace(row, iv_rank=None, iv_rank_n=6, ev_n=None)
+    assert any("sıralamak için yeterli değil" in line for line in explain(thin))
+
+    silent = dataclasses.replace(row, iv_rank=None, iv_rank_n=0, ev_n=None)
+    assert not any("IV rank" in line for line in explain(silent))  # nothing recorded: say nothing

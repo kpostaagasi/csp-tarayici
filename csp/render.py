@@ -13,27 +13,37 @@ from .sources import known_closes
 # when the terminal is too narrow the biggest number leaves first, so score/strike/DTE stay.
 COLUMNS = [
     (f"{'sym':<5}", lambda r: f"{r.sym:<5}", 0),
-    (f"{'spot':>7}", lambda r: f"{r.spot:>7.2f}", 10),
+    (f"{'spot':>7}", lambda r: f"{r.spot:>7.2f}", 11),
     (f"{'strike':>7}", lambda r: f"{r.strike:>7.2f}", 0),
-    (f"{'exp':>10}", lambda r: f"{r.exp!s:>10}", 9),
+    (f"{'exp':>10}", lambda r: f"{r.exp!s:>10}", 10),
     (f"{'dte':>4}", lambda r: f"{r.dte:>4}", 0),
-    (f"{'delta':>6}", lambda r: f"{r.delta:>6.2f}", 4),
-    (f"{'mid':>6}", lambda r: f"{r.mid:>6.2f}", 3),
+    (f"{'delta':>6}", lambda r: f"{r.delta:>6.2f}", 5),
+    (f"{'mid':>6}", lambda r: f"{r.mid:>6.2f}", 4),
     (f"{'ROC%y':>6}", lambda r: f"{r.roc * 100:>6.1f}", 0),
-    (f"{'IV':>6}", lambda r: f"{r.iv:>6.1f}", 5),
-    (f"{'RV30':>6}", lambda r: f"{(r.rv30 or 0):>6.1f}", 7),
+    (f"{'IV':>6}", lambda r: f"{r.iv:>6.1f}", 6),
+    (f"{'RV30':>6}", lambda r: f"{(r.rv30 or 0):>6.1f}", 8),
     (f"{'cush':>5}", lambda r: f"{r.cushion:>5.2f}", 0),
-    (f"{'sprd%':>6}", lambda r: f"{r.spread * 100:>6.1f}", 6),
-    (f"{'OI':>7}", lambda r: f"{r.oi:>7.0f}", 8),
-    (f"{'$col':>6}", lambda r: f"{r.collat:>6.0f}", 2),
+    (f"{'sprd%':>6}", lambda r: f"{r.spread * 100:>6.1f}", 7),
+    (f"{'OI':>7}", lambda r: f"{r.oi:>7.0f}", 9),
+    (f"{'$col':>6}", lambda r: f"{r.collat:>6.0f}", 3),
     (f"{'EV$':>6}", lambda r: ev_cell(r), 1),
-    (f"{'vrp':>4}", lambda r: f"{r.parts['vrp']:>4.2f}", 11),
-    (f"{'liq':>4}", lambda r: f"{r.parts['liq']:>4.2f}", 12),
-    (f"{'yld':>4}", lambda r: f"{r.parts['yield']:>4.2f}", 13),
+    (f"{'IVR':>4}", lambda r: f"{r.iv_rank:>4.2f}" if r.iv_rank is not None else f"{'—':>4}", 2),
+    (f"{'vrp':>4}", lambda r: f"{r.parts['vrp']:>4.2f}", 12),
+    (f"{'liq':>4}", lambda r: f"{r.parts['liq']:>4.2f}", 13),
+    (f"{'yld':>4}", lambda r: f"{r.parts['yield']:>4.2f}", 14),
     (f"{'score':>6}", lambda r: f"{r.score:>6}", 0),
 ]
 
-SORTS = [("score", -1), ("ev", -1), ("roc", -1), ("iv30", -1), ("cushion", -1), ("spread", 1), ("dte", 1)]
+SORTS = [
+    ("score", -1),
+    ("ev", -1),
+    ("iv_rank", -1),
+    ("roc", -1),
+    ("iv30", -1),
+    ("cushion", -1),
+    ("spread", 1),
+    ("dte", 1),
+]
 
 HDR_TRADES = (
     f"{'sym':<5} {'giriş':>10} {'vade':>10} {'dte':>4} {'strike':>7} {'prim':>6} {'spot':>7} "
@@ -91,6 +101,13 @@ def explain(row, px=None):
         f" · liq {p['liq']:.2f} (spread %{row.spread * 100:.1f}, OI {row.oi:.0f})"
         f" · yield {p['yield']:.2f} · cushion {p['cushion']:.2f}",
     ]
+    if row.iv_rank is not None:
+        out.append(
+            f" IV rank {row.iv_rank:.2f}: kaydettiğin {row.iv_rank_n} günün aralığında"
+            f" {'tepeye' if row.iv_rank >= 0.5 else 'dibe'} yakın (skora girmiyor)"
+        )
+    elif row.iv_rank_n:
+        out.append(f" IV rank: {row.iv_rank_n} kayıtlı gün var, sıralamak için yeterli değil")
     bt = backtest(row, px if px is not None else known_closes(row.sym))
     out.append(
         f" geçmiş {bt['years']} yıl / {bt['n']} pencere: bu mesafe %{bt['assign'] * 100:.0f} atama"

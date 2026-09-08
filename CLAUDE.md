@@ -43,14 +43,19 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
 - **`cache.py`** — dotfiles in `$HOME` (`.csp_hist.json`, `.csp_earnings.json`,
   `.csp_universe.json`, `.csp_watchlist.json`, `.csp_chains.db`). Writes re-read under a lock
   because scans are parallel; a half-written file is treated as an empty cache, never a
-  traceback.
+  traceback. It owns `snap_db()` too — the chain store is read by the *scanner* (IV rank), and
+  `score` sits below `backtest`, so opening it cannot live next to the backtest that fills it.
+  The read path (`sources.recorded_ivs`) returns `[]` for an absent file rather than creating
+  one: a machine that never snapshots must not grow a database from a plain scan.
 - **`sources.py`** — the only module that talks to vendors. In-process chain cache with
   `CHAIN_TTL = 600s`, so changing a filter never re-downloads. `known_closes()` is the
   never-fetches accessor the UI loop must use; `history()`/`closes()` may block on the network.
 - **`score.py`** — the core. `Filters` (hard cuts, per account) is deliberately separate from
   the scoring scales (`W`, `VRP_LO/HI`, `SPREAD_SCALE`, `OI_SCALE`, `YIELD_LO/HI`), which are
   fixed constants so that widening a filter cannot silently re-scale scores. `score_contract()`
-  is pure: pass it numbers, get back `(score, components, mid, spread, roc, cushion)`.
+  is pure: pass it numbers, get back `(score, components, mid, spread, roc, cushion)`. IV rank
+  lives here too (`iv_level`, `iv_levels`, `iv_rank`) and is **not** a score component — see the
+  invariant below.
 - **`backtest.py`** — two different measurements, do not conflate them:
   - `backtest()`/`ev()` — today's real premium replayed over the underlying's own daily path.
     No option is ever priced from a model. Memoized onto `Candidate.ev` because the TUI redraws
@@ -89,6 +94,16 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
   settle, not the first to open; never read the book's start date off it.
 - **Runtime dependencies stay empty.** `pyproject.toml` documents why (rate limit dominates;
   math is sub-millisecond; curses is already a full-screen UI). Adding one needs a real argument.
+- **IV rank is a signal, not a weight.** Its input is whatever this machine happened to record,
+  so a symbol tracked for a year and one added yesterday would be scored on different evidence —
+  and the score's whole job is to compare them in one table. It is a column, a panel line, a sort
+  key and an optional `--min-iv-rank` cut. Under `IVR_MIN_DAYS` recorded days it reports nothing
+  rather than a number. The band constants (`IVR_DTE_*`, `IVR_DELTA_*`) are fixed for the same
+  reason the scoring scales are: if they followed `Filters`, widening DTE would re-rank the world.
+- **The IV band is written twice** — as a SQL predicate in `sources.recorded_ivs` (a year of one
+  symbol's chains is tens of thousands of rows and the TUI re-scans on every keypress) and as a
+  comprehension in `score.iv_level` for the chain in hand. Nothing shares the predicate, so
+  `test_a_recorded_day_and_a_live_chain_rank_the_same` is what keeps them equal. Change one, run it.
 - **Language split**: user-facing strings (CLI help, TUI, error messages, README) are Turkish;
   code, comments and docstrings are English.
 - Comments prefixed `ponytail:` mark known, accepted limitations (e.g. overlapping backtest
