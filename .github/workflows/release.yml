@@ -15,6 +15,8 @@ jobs:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
       - run: pytest
+      - run: ruff check .
+      - run: ruff format --check .    # a red tag must never reach PyPI
       - run: pip install build
       - run: python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1

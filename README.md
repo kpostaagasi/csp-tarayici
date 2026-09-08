@@ -27,8 +27,8 @@ Ya da kaynaktan:
 
 ```bash
 git clone https://github.com/kpostaagasi/csp-tarayici && cd csp-tarayici
-pip install -e ".[dev]"
-pytest
+make install      # pip install -e ".[dev]"
+make check        # pytest + ruff check + ruff format --check — CI'ın koştuğu tek kapı
 ```
 
 Python 3.10+ (`curses`, `sqlite3` stdlib'de). Kurulumdan sonra komut adı `csp`.
