@@ -186,7 +186,7 @@ def scan_all(tickers, f, today=None, on_done=None):
                 rows += got
                 if on_done:
                     on_done(n, sym, got, err)
-        except BaseException:            # Ctrl-C: drop the queue, or the executor drains it first
+        except BaseException:  # Ctrl-C: drop the queue, or the executor drains it first
             for fut in jobs:
                 fut.cancel()
             raise

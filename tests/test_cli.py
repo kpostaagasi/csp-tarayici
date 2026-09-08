@@ -1,4 +1,5 @@
 """The entry point: argument surface, and Ctrl-C during a scan or in the TUI."""
+
 import pytest
 
 from csp import cli
@@ -9,12 +10,13 @@ def test_capital_and_earnings_reach_the_filters(monkeypatch):
     seen = {}
     monkeypatch.setattr(cli, "run_scan", lambda tickers, a, f: seen.update(tickers=tickers, f=f))
     cli.main(["nok", "sofi", "--capital", "900", "--allow-earnings"])
-    assert seen["tickers"] == ["NOK", "SOFI"]                  # upper-cased for the vendor
+    assert seen["tickers"] == ["NOK", "SOFI"]  # upper-cased for the vendor
     assert seen["f"] == Filters(capital=900.0, allow_earnings=True)
 
 
 def test_ctrl_c_exits_with_130_not_a_traceback(monkeypatch):
     """A TUI or a five-minute scan must not dump curses internals on the user's terminal."""
+
     def interrupted(*a, **kw):
         raise KeyboardInterrupt
 
@@ -40,7 +42,7 @@ def test_scan_all_cancels_the_queue_on_ctrl_c(monkeypatch):
         return []
 
     monkeypatch.setattr("csp.score.scan_symbol", scan)
-    monkeypatch.setattr("csp.score.WORKERS", 1)                # deterministic order
+    monkeypatch.setattr("csp.score.WORKERS", 1)  # deterministic order
     with pytest.raises(KeyboardInterrupt):
         scan_all(["A"] + [f"S{i}" for i in range(40)], Filters())
-    assert len(calls) < 40                                     # the rest never ran
+    assert len(calls) < 40  # the rest never ran

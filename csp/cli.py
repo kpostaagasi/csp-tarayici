@@ -95,8 +95,8 @@ def main(argv=None):
     try:
         return dispatch(argv)
     except KeyboardInterrupt:
-        print(file=sys.stderr)         # the shell prompt should not land mid-line
-        return 130                     # 128 + SIGINT, what a shell expects
+        print(file=sys.stderr)  # the shell prompt should not land mid-line
+        return 130  # 128 + SIGINT, what a shell expects
 
 
 def dispatch(argv=None):
