@@ -96,3 +96,14 @@ def test_only_unresolved_positions_says_so_instead(monkeypatch):
     with pytest.raises(SystemExit) as e:
         cli.main(["--replay", "NOK"])
     assert "vadesi henüz geçmedi" in str(e.value)
+
+
+def test_the_drop_message_names_the_iv_rank_cut_only_when_it_is_on(monkeypatch, capsys):
+    """A symbol dropped by a filter the reader forgot they set is the hardest kind to debug."""
+    monkeypatch.setattr("csp.score.scan_symbol", lambda sym, f, today=None: [])
+
+    cli.main(["NOK"])
+    assert "IV rank" not in capsys.readouterr().err
+
+    cli.main(["NOK", "--min-iv-rank", "0.5"])
+    assert "IV rank" in capsys.readouterr().err

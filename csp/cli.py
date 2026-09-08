@@ -98,11 +98,11 @@ def run_scan(tickers, a, f):
 
     top = sorted(best_per_symbol(rows), key=lambda r: -r.score)[: a.top]
     dropped = set(tickers) - {r.sym for r in rows} - {e.split(":")[0] for e in errs}
+    why = "spread / delta / OI / sermaye / kazanç"
+    if f.min_iv_rank is not None:
+        why += " / IV rank"  # the newest cut is the one a reader will not think to suspect
     for t in sorted(dropped):
-        print(
-            f"   {t}: hiçbir kontrat filtreleri geçmedi (spread / delta / OI / sermaye / kazanç)",
-            file=sys.stderr,
-        )
+        print(f"   {t}: hiçbir kontrat filtreleri geçmedi ({why})", file=sys.stderr)
     hdr, lines = table(top, 200)
     print(hdr)
     for line in lines:
