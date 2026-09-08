@@ -53,8 +53,8 @@ def replays(monkeypatch, trades=(), still_open=()):
     """Capture what run_replay asks the engine for, without touching $HOME or the network."""
     seen = {}
 
-    def fake(syms, f, path=None, max_per_sym=1):
-        seen.update(syms=syms, f=f, max_per_sym=max_per_sym)
+    def fake(syms, f, path=None, max_per_sym=1, take_profit=None):
+        seen.update(syms=syms, f=f, max_per_sym=max_per_sym, take_profit=take_profit)
         return list(trades), list(still_open)
 
     monkeypatch.setattr(cli, "replay", fake)
@@ -80,6 +80,22 @@ def test_max_per_symbol_reaches_the_engine(monkeypatch):
         cli.main(["--replay", "NOK", "--capital", "5000", "--max-per-symbol", "3"])
     assert seen["max_per_sym"] == 3
     assert seen["f"] == Filters(capital=5000.0)
+
+
+def test_take_profit_reaches_the_engine_and_is_bounded(monkeypatch, capsys):
+    seen = replays(monkeypatch)
+    with pytest.raises(SystemExit):
+        cli.main(["--replay", "NOK", "--take-profit", "0.5"])
+    assert seen["take_profit"] == 0.5
+
+    with pytest.raises(SystemExit):
+        cli.main(["--replay", "NOK"])
+    assert seen["take_profit"] is None  # no flag: every contract is held to expiry
+
+    for bad in ("0", "1", "1.5", "-0.2"):
+        with pytest.raises(SystemExit):
+            cli.main(["--replay", "NOK", "--take-profit", bad])
+        assert "0 ile 1 arasında" in capsys.readouterr().err
 
 
 def test_an_empty_chain_store_keeps_the_string_brew_test_asserts_on(monkeypatch):

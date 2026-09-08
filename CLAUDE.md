@@ -63,10 +63,11 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
   - `snapshot()`/`replay()` — records live put chains into SQLite (`puts` table, PK
     `(date, sym, exp, strike)`), then trades them back with the same filters and the same score,
     entering at the recorded **bid** and settling on the underlying's expiry close. `replay()` is
-    a portfolio: each day it settles what expired, recomputes uncommitted cash, and fills the
-    best-scoring contracts that fit, capped at `max_per_sym` per underlying. It returns
-    `(trades, still_open)` — trades in **expiry order**, because that is the order the cash
-    arrived and the drawdown is an equity curve. Unresolved positions are reported, never counted.
+    a portfolio: each day it settles what expired, optionally buys back what hit `take_profit`,
+    recomputes uncommitted cash, and fills the best-scoring contracts that fit, capped at
+    `max_per_sym` per underlying. It returns `(trades, still_open)` — trades in **resolution
+    order** (`exit`), because that is the order the cash arrived and the drawdown is an equity
+    curve. Unresolved positions are reported, never counted.
 - **`render.py`** — `COLUMNS` carries a drop priority per column; priority `0` never drops, so
   `sym strike dte ROC%y cush score` survive any terminal width. `explain()` produces the plain
   Turkish panel shared by `--explain` and the TUI.
@@ -95,8 +96,19 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
   may not.
 - **`replay_stats` is portfolio arithmetic**: `tied` is peak *concurrent* committed cash via
   `peak_committed()` (same-day releases before same-day entries), and `days` is the calendar span
-  from the earliest entry to the last expiry — idle cash counts. `trades[0]` is the first to
-  settle, not the first to open; never read the book's start date off it.
+  from the earliest entry to the last `exit` — idle cash counts. `trades[0]` is the first to
+  resolve, not the first to open; never read the book's start date off it. `deployed` sums the
+  days each position was actually held, which is its DTE only when it ran to expiry.
+- **A trade resolves on `exit`, not on `exp`.** Every consumer — the sort, `peak_committed()`,
+  the span, the position-days — reads `exit`, so a contract bought back early frees its
+  collateral on the day it was bought back. `settle` (the underlying's expiry close) and
+  `buyback` (the ask paid) are mutually exclusive; exactly one is `None`, and `assigned` may only
+  ever look at the settled half.
+- **The early exit is a recorded ask, never a model price.** `take_profit` closes a position only
+  when that day's stored chain carries an ask for that exact contract: an ask of `0` is no offer,
+  not a free buyback, and a contract closed on a date cannot be re-sold on the same date (paying
+  the ask and taking the bid back is the spread, not a trade). Entry at the bid and exit at the
+  ask is what keeps the round turn as expensive as it really was.
 - **Runtime dependencies stay empty.** `pyproject.toml` documents why (rate limit dominates;
   math is sub-millisecond; curses is already a full-screen UI). Adding one needs a real argument.
 - **IV rank is a signal, not a weight.** Its input is whatever this machine happened to record,

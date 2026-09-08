@@ -2,7 +2,8 @@
 
 `ev()` needs no extra data: it replays today's real premium over the symbol's own price history.
 `replay()` is the real one: it trades recorded option chains. Nothing here ever prices an option
-from a model — the premium is always a quote that existed.
+from a model — the premium is always a quote that existed, entry at a recorded bid and, when a
+profit target closes a position early, exit at a recorded ask.
 """
 
 import datetime as dt
@@ -137,19 +138,52 @@ def _settle(pos, trades):
     px = close_on(pos["sym"], pos["exp"])
     if px is None:
         return False
-    trades.append({**pos, "settle": px, "pl": pos["credit"] * 100 + min(0.0, px - pos["strike"]) * 100})
+    trades.append(
+        {
+            **pos,
+            "exit": pos["exp"],  # the day the cash came back; for a held contract, expiry
+            "settle": px,
+            "buyback": None,
+            "pl": pos["credit"] * 100 + min(0.0, px - pos["strike"]) * 100,
+        }
+    )
     return True
 
 
-def replay(syms, f, path=None, max_per_sym=1):
-    """Replay recorded chains as a portfolio: same filters, same score, real bid, held to expiry.
+def _close_early(pos, date, ask, trades):
+    """Buy the put back at a quote that existed, on the day it existed.
+
+    The entry was filled at the recorded bid, so the exit is filled at the recorded ask: the two
+    halves of a round turn cost the spread, which is exactly what a profit target gives up in
+    exchange for the cash and the tail risk it hands back.
+    """
+    trades.append(
+        {
+            **pos,
+            "exit": date,
+            "settle": None,  # never assigned: the position was gone before expiry
+            "buyback": ask,
+            "pl": (pos["credit"] - ask) * 100,
+        }
+    )
+
+
+def replay(syms, f, path=None, max_per_sym=1, take_profit=None):
+    """Replay recorded chains as a portfolio: same filters, same score, real bid, real ask.
 
     Returns `(trades, still_open)`. Capital is the only thing rationing entries — each day the
     engine settles what expired, recomputes uncommitted cash, and fills the best-scoring
     contracts that fit, at most `max_per_sym` per underlying so one name cannot become the whole
     book. Sold at the recorded BID (the fill you would actually get), settled against the
-    underlying close on expiration day. No rolls, no early close, no wheel, and no earnings
-    filter (nobody records past estimates).
+    underlying close on expiration day. No rolls, no wheel, and no earnings filter (nobody
+    records past estimates).
+
+    `take_profit` (0..1, None = hold every contract to expiry) is the one management rule this
+    store can actually answer: a position whose recorded ASK has fallen to `1 - take_profit` of
+    the credit is bought back that day. It is a real question rather than a preference — closing
+    at half the max profit gives up the spread and the rest of the decay, and buys back the
+    cash and the tail. Both sides of that trade land in the numbers, since the freed collateral
+    is what funds the next entry.
 
     `syms` takes one symbol, a list, or None for everything recorded. A single name with capital
     for one contract behaves exactly like the one-position-at-a-time engine this replaces.
@@ -174,6 +208,19 @@ def replay(syms, f, path=None, max_per_sym=1):
     trades, open_pos, rv, ivr = [], [], {}, {}
     for date in sorted(days):
         open_pos = [p for p in open_pos if not (p["exp"] <= date and _settle(p, trades))]
+        quotes = {(r[1], r[2], r[3]): r[5] for r in days[date]}  # (sym, exp, strike) -> ask
+        gone = set()
+        if take_profit:
+            kept = []
+            for p in open_pos:
+                ask = quotes.get((p["sym"], p["exp"], p["strike"]), 0.0)
+                # an ask of 0 is no offer, not a free buyback: without a quote there is no trade
+                if 0 < ask <= p["credit"] * (1 - take_profit):
+                    _close_early(p, date, ask, trades)
+                    gone.add((p["sym"], p["exp"], p["strike"]))
+                else:
+                    kept.append(p)
+            open_pos = kept
         free = f.capital - sum(p["collat"] for p in open_pos)
         held = Counter(p["sym"] for p in open_pos)
         today = dt.date.fromisoformat(date)
@@ -196,6 +243,8 @@ def replay(syms, f, path=None, max_per_sym=1):
             collat = strike * 100
             if collat > free or held[sym] >= max_per_sym:
                 continue
+            if (sym, exp, strike) in gone:
+                continue  # closing at the ask and re-selling at the bid the same day is a wash
             if any(p["sym"] == sym and p["exp"] == exp and p["strike"] == strike for p in open_pos):
                 continue
             open_pos.append(
@@ -216,7 +265,7 @@ def replay(syms, f, path=None, max_per_sym=1):
             held[sym] += 1
 
     open_pos = [p for p in open_pos if not _settle(p, trades)]
-    trades.sort(key=lambda t: (t["exp"], t["entry"], t["sym"]))
+    trades.sort(key=lambda t: (t["exit"], t["entry"], t["sym"]))
     return trades, open_pos
 
 
@@ -224,9 +273,10 @@ def peak_committed(trades):
     """Most cash ever committed at once: the denominator a portfolio return has to use.
 
     Same-day releases are applied before that day's entries, which is the order the engine
-    itself fills in — the cash an expiring contract frees is spendable the day it expires.
+    itself fills in — the cash a contract frees is spendable the day it is resolved. That is
+    `exit`, not `exp`: a position bought back early hands its collateral back early too.
     """
-    events = [(t["entry"], t["collat"]) for t in trades] + [(t["exp"], -t["collat"]) for t in trades]
+    events = [(t["entry"], t["collat"]) for t in trades] + [(t["exit"], -t["collat"]) for t in trades]
     run = peak = 0.0
     for _, delta in sorted(events, key=lambda e: (e[0], e[1])):
         run += delta
@@ -239,8 +289,8 @@ def replay_stats(trades, still_open=()):
         return None
     pl = [t["pl"] for t in trades]  # trades arrive in settlement order: this is the equity curve
     tied = peak_committed(trades)
-    # trades are ordered by expiry, so trades[0] is the first to settle, not the first to open
-    first, last = min(t["entry"] for t in trades), max(t["exp"] for t in trades)
+    # trades are ordered by resolution, so trades[0] is the first to pay out, not the first to open
+    first, last = min(t["entry"] for t in trades), max(t["exit"] for t in trades)
     span = (dt.date.fromisoformat(last) - dt.date.fromisoformat(first)).days
     run = peak = low = 0.0
     for x in pl:  # equity-curve drawdown, in dollars
@@ -253,8 +303,11 @@ def replay_stats(trades, still_open=()):
         mean=sum(pl) / len(pl),
         worst=min(pl),
         wins=sum(1 for x in pl if x > 0) / len(pl),
-        assigned=sum(1 for t in trades if t["settle"] < t["strike"]) / len(trades),
-        deployed=sum(t["dte"] for t in trades),  # position-days; overlapping ones each count
+        assigned=sum(1 for t in trades if t["settle"] is not None and t["settle"] < t["strike"])
+        / len(trades),
+        early=sum(1 for t in trades if t["buyback"] is not None),
+        # position-days actually held, so an early close counts the days it ran, not its DTE
+        deployed=sum(_days(t["entry"], t["exit"]) for t in trades),
         days=max(span, 1),  # calendar days the book was alive, idle stretches included
         tied=tied,
         drawdown=low,
@@ -265,6 +318,10 @@ def replay_stats(trades, still_open=()):
         open_n=len(still_open),
         open_tied=sum(p["collat"] for p in still_open),
     )
+
+
+def _days(a, b):
+    return (dt.date.fromisoformat(b) - dt.date.fromisoformat(a)).days
 
 
 def recorded(path=None):

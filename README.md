@@ -44,6 +44,7 @@ csp --universe --min-iv-rank 0.5      # vol'ü kendi kaydettiğin aralığın ü
 csp --universe --snapshot             # bugünün put zincirlerini diske yaz (günlük cron)
 csp --replay NOK --capital 2000       # kayıtlı zincirlerle gerçek backtest
 csp --replay TÜMÜ --capital 5000      # kaydettiğin her sembol, tek portföy olarak
+csp --replay TÜMÜ --take-profit 0.5   # primin yarısı kalınca geri al: vadeye taşımaya karşı ölç
 ```
 
 TUI tuşları: `?` **yardım — her kolonun ne demek olduğu** · `↑↓`/`jk` gezin ·
@@ -280,7 +281,8 @@ Toplu veri satın alırsan (OptionsDX/dolt) aynı 10 kolonluk tabloya yükle; `-
 ### `--replay SYM` ne yapıyor
 
 Kayıtlı zincirleri gün gün gezip **tarayıcının kendi filtreleriyle ve kendi skoruyla** kontrat
-seçiyor, sonra vadeye kadar tutuyor. Bir portföy simülasyonu: girişleri sınırlayan tek şey nakit.
+seçiyor, sonra vadeye (ya da `--take-profit` verdiysen kâr hedefine) kadar tutuyor. Bir portföy
+simülasyonu: girişleri sınırlayan tek şey nakit.
 
 - giriş fiyatı **kaydedilen bid** — gördüğün mid değil, gerçekten alacağın fiil
 - her gün önce vadesi gelenler uzlaşıyor, sonra serbest kalan nakitle en yüksek skorlu kontratlar
@@ -291,7 +293,8 @@ seçiyor, sonra vadeye kadar tutuyor. Bir portföy simülasyonu: girişleri sın
 - uzlaşma: vade gününün gerçek kapanışı (CBOE günlük barları), `prim×100 + min(0, S_T − strike)×100`
 - RV bileşeni o güne kadarki kapanışlarla hesaplanıyor — ileriye bakış yok
 - vadesi henüz geçmemiş kontrat sonuç değil: "hâlâ açık" diye ayrı raporlanıyor, P&L'e girmiyor
-- roll yok, erken kapatma yok, wheel yok, kazanç filtresi yok (geçmiş kazanç tahminleri kayıtlı değil)
+- erken kapatma yalnız `--take-profit` verilirsen, aşağıdaki kuralla; roll yok, wheel yok,
+  kazanç filtresi yok (geçmiş kazanç tahminleri kayıtlı değil)
 
 Özet satırları portföy diliyle konuşuyor: **aynı anda bloke edilen tepe** nakit (en büyük tek
 teminat değil), kitabın **takvim günü** ömrü (boşta geçen günler dahil) ve bunun yanında
@@ -311,16 +314,48 @@ kazanan %100 · atanan %0 · en kötü seri +$0 · aynı anda bloke edilen tepe 
 tepe teminata göre yıllık %37.3  (boşta geçen günler dahil)
 ```
 
-Satırlar **vade sırasında**, yani nakdin gerçekten geldiği sırada; birkaç kontrat aynı anda
+Satırlar **çözülme sırasında**, yani nakdin gerçekten geldiği sırada; birkaç kontrat aynı anda
 açıkken bu giriş sırasından farklı oluyor ve "en kötü seri" ancak bu sırayla anlamlı.
 
 (Yukarısı motoru gerçek NOK kotasyonlarını geçmişe kaydırarak sürdüğüm duman testi; `spot`
 kolonu o yüzden bugünün spotu. Tek günlük gerçek kayıtla `--replay` haklı olarak boş dönüyor:
 kayıtlı vadelerin hiçbiri henüz geçmedi.)
 
+### `--take-profit`: kârı erken al, nakdi erken kurtar
+
+"Primin %50'sini kazanınca kapat" en yaygın CSP kuralı, ama bir tercih değil ölçülebilir bir
+soru: erken kapanınca spread'i ve kalan zaman değerini bırakıyorsun, karşılığında teminatı ve
+kuyruk riskini geri alıyorsun. Elinde kayıtlı zincir varken bu soruyu **uydurmadan**
+cevaplayabiliyorsun, çünkü geri alım fiyatı da o gün gerçekten var olan bir kotasyon:
+
+- giriş kaydedilen **bid**, çıkış kaydedilen **ask** — gidiş-dönüş spread'i olması gerektiği
+  kadar pahalı
+- `--take-profit 0.5`: o günün kaydında kontratın ask'i primin yarısına ya da altına düştüyse
+  kapanıyor. Ask `0` ise teklif yok demektir, bedava geri alım değil: pozisyon açık kalıyor
+- kapanan gün teminat **o gün** serbest kalıyor ve aynı gün başka bir kontratı fonlayabiliyor —
+  kuralın bütün iddiası zaten bu
+- aynı kontrat kapandığı gün yeniden satılmıyor (ask'ten alıp bid'den satmak sadece spread)
+- bayrak yoksa hiçbir şey değişmiyor: her kontrat vadeye taşınıyor
+
+Tabloya `çıkış` kolonu yalnız kitapta erken kapanış varsa ekleniyor; `↩0.11` "0.11'den geri
+alındı", çıplak sayı ise vade günü hissenin kapanışı:
+
+```
+sym        giriş       vade      çıkış  dte  strike   prim    spot  uzlaşma  skor    P&L$
+NOK   2026-01-05 2026-02-06 2026-01-20   32    9.00   0.25   10.00    ↩0.11    43     +14
+SOFI  2026-01-05 2026-02-06 2026-02-06   32   17.00   0.64   18.89    16.80    54     +44
+
+1 pozisyon kâr hedefiyle erken kapatıldı (↩ = kaydedilen ask'ten geri alım) · 1 tanesi vadeye taşındı
+```
+
+(Bu tablo da aynı türden bir duman testi: kotasyonlar elle yazılmış, gerçek bir kayıt defteri
+değil.) Aynı kitabı bayraksız koştur, iki satırı yan yana koy: pozisyon-günü, tepe teminat ve yıllık
+getiri farkı kuralın o evrende neye mal olduğunu söyler. Boşta kalan nakde koyacak yeni kontrat
+yoksa erken kapatmak yıllık getiriyi **düşürür** — bu motor onu da dürüstçe gösteriyor.
+
 ## Yapılmayanlar
 
-Roll / erken kapatma / wheel (atanan hisseyi covered call'a çevirme) simülasyonu, toplu
+Roll / wheel (atanan hisseyi covered call'a çevirme) simülasyonu, toplu
 geçmiş zincir importer'ı
 (OptionsDX/dolt CSV → SQLite), pozisyon defteri/günlük, temel-iflas riski (Merton
 distance-to-default), faktör yoğunlaşma cezası, otomatik yenileme.
