@@ -57,7 +57,11 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
     ~5×/second.
   - `snapshot()`/`replay()` — records live put chains into SQLite (`puts` table, PK
     `(date, sym, exp, strike)`), then trades them back with the same filters and the same score,
-    entering at the recorded **bid** and settling on the underlying's expiry close.
+    entering at the recorded **bid** and settling on the underlying's expiry close. `replay()` is
+    a portfolio: each day it settles what expired, recomputes uncommitted cash, and fills the
+    best-scoring contracts that fit, capped at `max_per_sym` per underlying. It returns
+    `(trades, still_open)` — trades in **expiry order**, because that is the order the cash
+    arrived and the drawdown is an equity curve. Unresolved positions are reported, never counted.
 - **`render.py`** — `COLUMNS` carries a drop priority per column; priority `0` never drops, so
   `sym strike dte ROC%y cush score` survive any terminal width. `explain()` produces the plain
   Turkish panel shared by `--explain` and the TUI.
@@ -69,12 +73,20 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
 
 - **`score.passes()` is shared by the live scan and `replay()`** — that shared call is what makes
   the backtest a test of the scanner rather than of a second, drifting rule set. Add a hard cut
-  there, not in a caller.
+  there, not in a caller. Its `cash` argument is the collateral available *right now* (the whole
+  account for a scan, the uncommitted part for a portfolio replay) and defaults to `f.capital`,
+  so a caller that does not think in portfolios cannot get it wrong.
 - **`Filters` is one mutable object** flowing CLI → scan → TUI → backtest. TUI keys mutate it
   in place and rescan.
-- **No lookahead in `replay()`**: realized vol is computed with `realized_vol(sym, before=date)`.
-  A contract whose expiry has not passed ends the replay (`settle is None` → `break`), it is
-  never counted.
+- **No lookahead in `replay()`**: realized vol is computed with `realized_vol(sym, before=date)`,
+  and entries only ever see that day's recorded quotes. A contract whose expiry has not passed
+  (`close_on()` → `None`) stays in `still_open` and is never counted — settlement may reach past
+  the last recorded chain (the stock kept trading after you stopped recording), the *decision*
+  may not.
+- **`replay_stats` is portfolio arithmetic**: `tied` is peak *concurrent* committed cash via
+  `peak_committed()` (same-day releases before same-day entries), and `days` is the calendar span
+  from the earliest entry to the last expiry — idle cash counts. `trades[0]` is the first to
+  settle, not the first to open; never read the book's start date off it.
 - **Runtime dependencies stay empty.** `pyproject.toml` documents why (rate limit dominates;
   math is sub-millisecond; curses is already a full-screen UI). Adding one needs a real argument.
 - **Language split**: user-facing strings (CLI help, TUI, error messages, README) are Turkish;

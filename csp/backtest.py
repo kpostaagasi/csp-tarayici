@@ -7,6 +7,7 @@ from a model — the premium is always a quote that existed.
 
 import datetime as dt
 import sqlite3
+from collections import Counter
 
 from .cache import CHAINS
 from .score import Candidate, occ, parse_occ, passes, realized_vol, score_contract
@@ -105,67 +106,121 @@ def snapshot(tickers, max_dte=70, path=None):
     return len(rows)
 
 
-def replay(sym, f, path=None):
-    """Replay recorded chains: same filters, same score, real bid, held to expiry.
+def recorded_symbols(path=None):
+    """Every symbol the local chain store has ever seen, alphabetically."""
+    with snap_db(path) as con:
+        return [r[0] for r in con.execute("select distinct sym from puts order by sym")]
 
-    One position at a time — a new one only after the last expires. Sold at the recorded BID
-    (the fill you would actually get), settled against the underlying close on expiration day.
-    No rolls, no early close, no wheel, and no earnings filter (nobody records past estimates).
+
+def _settle(pos, trades):
+    """Move a position into `trades` once the underlying has a close on its expiration day.
+
+    False means the price series stops short of that expiry, i.e. the position is still open.
+    An open position is not a result and is never counted: no lookahead, and no half-trades.
     """
-    sym = sym.upper()
+    px = close_on(pos["sym"], pos["exp"])
+    if px is None:
+        return False
+    trades.append({**pos, "settle": px, "pl": pos["credit"] * 100 + min(0.0, px - pos["strike"]) * 100})
+    return True
+
+
+def replay(syms, f, path=None, max_per_sym=1):
+    """Replay recorded chains as a portfolio: same filters, same score, real bid, held to expiry.
+
+    Returns `(trades, still_open)`. Capital is the only thing rationing entries — each day the
+    engine settles what expired, recomputes uncommitted cash, and fills the best-scoring
+    contracts that fit, at most `max_per_sym` per underlying so one name cannot become the whole
+    book. Sold at the recorded BID (the fill you would actually get), settled against the
+    underlying close on expiration day. No rolls, no early close, no wheel, and no earnings
+    filter (nobody records past estimates).
+
+    `syms` takes one symbol, a list, or None for everything recorded. A single name with capital
+    for one contract behaves exactly like the one-position-at-a-time engine this replaces.
+    ponytail: entries are filled at the same day's recorded quote for every position opened that
+    day, so a portfolio that fills 5 contracts assumes 5 fills at those quotes.
+    """
+    if isinstance(syms, str):
+        syms = [syms]
+    syms = sorted({s.upper() for s in syms}) if syms else recorded_symbols(path)
+    if not syms:
+        return [], []
+    cols = "date, sym, exp, strike, bid, ask, iv, delta, oi, spot"
+    holes = ",".join("?" * len(syms))
     con = snap_db(path)
-    rows = con.execute(
-        "select date, exp, strike, bid, ask, iv, delta, oi, spot from puts where sym = ? order by date",
-        (sym,),
-    ).fetchall()
+    rows = con.execute(f"select {cols} from puts where sym in ({holes}) order by date", syms).fetchall()
+
     days = {}
     for r in rows:
         days.setdefault(r[0], []).append(r)
-    trades, busy_until = [], ""
+
+    trades, open_pos, rv = [], [], {}
     for date in sorted(days):
-        if date <= busy_until:
-            continue
-        today, best = dt.date.fromisoformat(date), None
-        rv = realized_vol(sym, before=date)  # only closes up to that day: no lookahead
-        for _, exp, strike, bid, ask, iv, delta, oi, spot in days[date]:
+        open_pos = [p for p in open_pos if not (p["exp"] <= date and _settle(p, trades))]
+        free = f.capital - sum(p["collat"] for p in open_pos)
+        held = Counter(p["sym"] for p in open_pos)
+        today = dt.date.fromisoformat(date)
+
+        picks = []
+        for _, sym, exp, strike, bid, ask, iv, delta, oi, spot in days[date]:
             dte = (dt.date.fromisoformat(exp) - today).days
-            if not passes(f, dte, strike, bid, ask, delta, oi):
+            if not passes(f, dte, strike, bid, ask, delta, oi, cash=free):
                 continue
-            sc = score_contract(spot, iv or 0.0, rv, strike, dte, bid, ask, oi)[0]
-            if not best or sc > best[0]:
-                best = (sc, exp, strike, bid, spot, dte, delta)
-        if not best:
-            continue
-        sc, exp, strike, bid, spot, dte, delta = best
-        settle = close_on(sym, exp)
-        if settle is None:
-            break  # expiry still ahead: an open position, not a result
-        trades.append(
-            dict(
-                sym=sym,
-                entry=date,
-                exp=exp,
-                dte=dte,
-                strike=strike,
-                credit=bid,
-                spot=spot,
-                delta=delta,
-                settle=settle,
-                score=sc,
-                collat=strike * 100,
-                pl=bid * 100 + min(0.0, settle - strike) * 100,
+            if (sym, date) not in rv:
+                rv[sym, date] = realized_vol(sym, before=date)  # only closes up to that day
+            sc = score_contract(spot, iv or 0.0, rv[sym, date], strike, dte, bid, ask, oi)[0]
+            picks.append((sc, sym, exp, strike, bid, spot, dte, delta))
+
+        for sc, sym, exp, strike, bid, spot, dte, delta in sorted(picks, key=lambda p: -p[0]):
+            collat = strike * 100
+            if collat > free or held[sym] >= max_per_sym:
+                continue
+            if any(p["sym"] == sym and p["exp"] == exp and p["strike"] == strike for p in open_pos):
+                continue
+            open_pos.append(
+                dict(
+                    sym=sym,
+                    entry=date,
+                    exp=exp,
+                    dte=dte,
+                    strike=strike,
+                    credit=bid,
+                    spot=spot,
+                    delta=delta,
+                    score=sc,
+                    collat=collat,
+                )
             )
-        )
-        busy_until = exp
-    return trades
+            free -= collat
+            held[sym] += 1
+
+    open_pos = [p for p in open_pos if not _settle(p, trades)]
+    trades.sort(key=lambda t: (t["exp"], t["entry"], t["sym"]))
+    return trades, open_pos
 
 
-def replay_stats(trades):
+def peak_committed(trades):
+    """Most cash ever committed at once: the denominator a portfolio return has to use.
+
+    Same-day releases are applied before that day's entries, which is the order the engine
+    itself fills in — the cash an expiring contract frees is spendable the day it expires.
+    """
+    events = [(t["entry"], t["collat"]) for t in trades] + [(t["exp"], -t["collat"]) for t in trades]
+    run = peak = 0.0
+    for _, delta in sorted(events, key=lambda e: (e[0], e[1])):
+        run += delta
+        peak = max(peak, run)
+    return peak
+
+
+def replay_stats(trades, still_open=()):
     if not trades:
         return None
-    pl = [t["pl"] for t in trades]
-    held = sum(t["dte"] for t in trades) or 1
-    tied = max(t["collat"] for t in trades)  # worst single cash commitment: the real denominator
+    pl = [t["pl"] for t in trades]  # trades arrive in settlement order: this is the equity curve
+    tied = peak_committed(trades)
+    # trades are ordered by expiry, so trades[0] is the first to settle, not the first to open
+    first, last = min(t["entry"] for t in trades), max(t["exp"] for t in trades)
+    span = (dt.date.fromisoformat(last) - dt.date.fromisoformat(first)).days
     run = peak = low = 0.0
     for x in pl:  # equity-curve drawdown, in dollars
         run += x
@@ -178,12 +233,16 @@ def replay_stats(trades):
         worst=min(pl),
         wins=sum(1 for x in pl if x > 0) / len(pl),
         assigned=sum(1 for t in trades if t["settle"] < t["strike"]) / len(trades),
-        days=held,
+        deployed=sum(t["dte"] for t in trades),  # position-days; overlapping ones each count
+        days=max(span, 1),  # calendar days the book was alive, idle stretches included
         tied=tied,
         drawdown=low,
-        ann=sum(pl) / tied * 365 / held if tied else 0.0,
-        first=trades[0]["entry"],
-        last=trades[-1]["exp"],
+        ann=sum(pl) / tied * 365 / max(span, 1) if tied else 0.0,
+        syms=len({t["sym"] for t in trades}),
+        first=first,
+        last=last,
+        open_n=len(still_open),
+        open_tied=sum(p["collat"] for p in still_open),
     )
 
 
@@ -193,4 +252,16 @@ def recorded(path=None):
         return con.execute("select count(*), count(distinct date), count(distinct sym) from puts").fetchone()
 
 
-__all__ = ["backtest", "ev", "snap_db", "snapshot", "replay", "replay_stats", "recorded", "Candidate", "occ"]
+__all__ = [
+    "backtest",
+    "ev",
+    "snap_db",
+    "snapshot",
+    "replay",
+    "replay_stats",
+    "peak_committed",
+    "recorded",
+    "recorded_symbols",
+    "Candidate",
+    "occ",
+]

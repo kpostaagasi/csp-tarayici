@@ -2,7 +2,7 @@
 
 import dataclasses
 
-from csp.backtest import backtest, ev, replay, replay_stats, snap_db
+from csp.backtest import backtest, ev, peak_committed, replay, replay_stats, snap_db
 from csp.score import Filters
 
 
@@ -57,7 +57,7 @@ def test_ev_is_memoized_on_the_row(row, history):
 # ------------------------------------------------------------------ replay of recorded chains
 ENTRIES = (
     ("2026-01-05", "2026-02-06"),  # the trade
-    ("2026-01-06", "2026-02-06"),  # inside it: must be skipped
+    ("2026-01-06", "2026-02-06"),  # inside it: only opened if there is cash left over
     ("2026-02-09", "2026-03-13"),
 )  # expiry still ahead: not a result
 QUOTES = (
@@ -67,56 +67,155 @@ QUOTES = (
 )  # delta band and capital both reject it
 
 
-def recorded_db(tmp_path):
+def recorded_db(tmp_path, syms=("T",), entries=ENTRIES, quotes=QUOTES):
     db = tmp_path / "chains.db"
     with snap_db(db) as con:
-        for date, exp in ENTRIES:
-            for strike, delta, bid, ask in QUOTES:
-                con.execute(
-                    "insert or replace into puts values (?,?,?,?,?,?,?,?,?,?)",
-                    (date, "T", exp, strike, bid, ask, 50.0, delta, 500.0, 10.0),
-                )
+        for sym in syms:
+            for date, exp in entries:
+                for strike, delta, bid, ask in quotes:
+                    con.execute(
+                        "insert or replace into puts values (?,?,?,?,?,?,?,?,?,?)",
+                        (date, sym, exp, strike, bid, ask, 50.0, delta, 500.0, 10.0),
+                    )
     return db
 
 
-def dated_history(history):
-    dates = (
-        [f"2025-12-{i:02d}" for i in range(1, 32)]
-        + [f"2026-01-{i:02d}" for i in range(1, 32)]
-        + [f"2026-02-{i:02d}" for i in range(1, 7)]
-    )
-    history("T", [10.0] * (len(dates) - 1) + [9.2], dates)  # expiry close 9.2: 9.5 breached
+def dated_history(history, syms=("T",), through="2026-02-06"):
+    """Flat at 10.00 until the last day, which closes at 9.20 — so a 9.50 strike is breached."""
+    dates = [f"2025-12-{i:02d}" for i in range(1, 32)] + [f"2026-01-{i:02d}" for i in range(1, 32)]
+    dates += [d for d in (f"2026-02-{i:02d}" for i in range(1, 29)) if d <= through]
+    dates += [d for d in (f"2026-03-{i:02d}" for i in range(1, 32)) if d <= through]
+    for sym in syms:
+        history(sym, [10.0] * (len(dates) - 1) + [9.2], dates)
     return dates
 
 
-def test_replay_trades_one_position_at_a_time(tmp_path, history):
+def test_replay_trades_one_position_at_a_time_when_that_is_all_the_cash_buys(tmp_path, history):
+    """The single-position engine this replaces is just the $1000 corner of the portfolio one."""
     dated_history(history)
-    trades = replay("T", Filters(capital=1000), path=recorded_db(tmp_path))
+    trades, still_open = replay("T", Filters(capital=1000), path=recorded_db(tmp_path))
     assert [t["entry"] for t in trades] == ["2026-01-05"]
+    # 2026-02-09 does fill: the first contract expired on the 6th and gave its $950 back. The old
+    # engine stopped the replay at the first unresolved contract and never saw this entry at all.
+    assert [(p["entry"], p["exp"]) for p in still_open] == [("2026-02-09", "2026-03-13")]
     t = trades[0]
-    assert (t["strike"], t["credit"], t["exp"], t["dte"]) == (9.5, 0.40, "2026-02-06", 32)
+    assert (t["sym"], t["strike"], t["credit"], t["exp"], t["dte"]) == ("T", 9.5, 0.40, "2026-02-06", 32)
     assert t["settle"] == 9.2
     assert abs(t["pl"] - (0.40 - 0.30) * 100) < 1e-9  # credit at the bid, assigned at expiry
 
 
 def test_replay_stats_measure_the_committed_cash(tmp_path, history):
     dated_history(history)
-    s = replay_stats(replay("T", Filters(capital=1000), path=recorded_db(tmp_path)))
-    assert (s["n"], s["wins"], s["assigned"], s["tied"]) == (1, 1.0, 1.0, 950.0)
+    trades, still_open = replay("T", Filters(capital=1000), path=recorded_db(tmp_path))
+    s = replay_stats(trades, still_open)
+    assert (s["n"], s["syms"], s["wins"], s["assigned"], s["tied"]) == (1, 1, 1.0, 1.0, 950.0)
     assert abs(s["total"] - 10) < 1e-9 and s["drawdown"] == 0.0
+    assert (s["days"], s["deployed"]) == (32, 32)  # one position, no idle stretch: they agree
     assert abs(s["ann"] - 10 / 950 * 365 / 32) < 1e-6
 
 
 def test_replay_respects_capital(tmp_path, history):
     dated_history(history)
     db = recorded_db(tmp_path)
-    cheap = replay("T", Filters(capital=900), path=db)  # $950 collateral no longer affordable
+    cheap, _ = replay("T", Filters(capital=900), path=db)  # $950 collateral no longer affordable
     assert (cheap[0]["strike"], cheap[0]["credit"]) == (9.0, 0.20)
     assert abs(cheap[0]["pl"] - 20.0) < 1e-9  # 9.00 was never breached
     assert replay_stats(cheap)["assigned"] == 0.0
-    assert replay("T", Filters(capital=100), path=db) == []
+    assert replay("T", Filters(capital=100), path=db) == ([], [])
 
 
 def test_replay_of_an_unrecorded_symbol_is_empty(tmp_path):
-    assert replay("NOPE", Filters(), path=recorded_db(tmp_path)) == []
+    assert replay("NOPE", Filters(), path=recorded_db(tmp_path)) == ([], [])
+    assert replay([], Filters(), path=tmp_path / "empty.db") == ([], [])
     assert replay_stats([]) is None
+
+
+# --------------------------------------------------------------------------- portfolio behaviour
+def test_spare_cash_fills_a_second_position_the_same_day(tmp_path, history):
+    """$2000 buys both contracts; the old engine could only ever hold the better one."""
+    dated_history(history)
+    trades, _ = replay("T", Filters(capital=2000), path=recorded_db(tmp_path), max_per_sym=2)
+    assert sorted(t["strike"] for t in trades) == [9.0, 9.5]
+    assert all(t["entry"] == "2026-01-05" for t in trades)  # best score first, then what fits
+    s = replay_stats(trades)
+    assert s["tied"] == 1850.0  # both at once, not the larger of the two
+    assert abs(s["total"] - 30.0) < 1e-9  # +$10 assigned on 9.50, +$20 kept on 9.00
+    assert s["deployed"] == 64 and s["days"] == 32  # two overlapping positions, one 32-day book
+
+
+def test_concentration_is_capped_per_symbol(tmp_path, history):
+    """Cash alone would let one name become the entire book."""
+    dated_history(history)
+    trades, _ = replay("T", Filters(capital=2000), path=recorded_db(tmp_path), max_per_sym=1)
+    assert [t["strike"] for t in trades] == [9.5]
+
+
+def test_capital_frees_up_when_a_position_expires(tmp_path, history):
+    """The day a contract expires its collateral is spendable again — same day, not the next."""
+    entries = (("2026-01-05", "2026-02-06"), ("2026-02-06", "2026-03-13"))
+    dated_history(history, through="2026-03-13")
+    trades, still_open = replay("T", Filters(capital=1000), path=recorded_db(tmp_path, entries=entries))
+    assert [(t["entry"], t["exp"]) for t in trades] == [
+        ("2026-01-05", "2026-02-06"),
+        ("2026-02-06", "2026-03-13"),
+    ]
+    assert still_open == []
+    s = replay_stats(trades)
+    assert s["tied"] == 950.0  # sequential, never doubled up
+    assert s["days"] == 67 and s["deployed"] == 32 + 35
+
+
+def test_a_position_whose_expiry_has_not_passed_is_open_not_a_result(tmp_path, history):
+    """No lookahead and no half-trades: an unresolved contract is reported, never counted."""
+    dated_history(history)  # price series stops 2026-02-06
+    entries = (("2026-02-09", "2026-03-13"),)
+    trades, still_open = replay("T", Filters(capital=1000), path=recorded_db(tmp_path, entries=entries))
+    assert trades == []
+    assert [(p["sym"], p["exp"], p["collat"]) for p in still_open] == [("T", "2026-03-13", 950.0)]
+    assert replay_stats(trades, still_open) is None
+
+
+def test_the_book_spreads_across_symbols(tmp_path, history):
+    dated_history(history, syms=("T", "U"))
+    db = recorded_db(tmp_path, syms=("T", "U"))
+    trades, _ = replay(None, Filters(capital=2000), path=db)  # None = every recorded symbol
+    assert sorted(t["sym"] for t in trades) == ["T", "U"]
+    assert all(t["strike"] == 9.5 for t in trades)  # one per name, the best-scoring one
+    s = replay_stats(trades)
+    assert (s["syms"], s["tied"]) == (2, 1900.0)
+
+    one, _ = replay("T", Filters(capital=2000), path=db)
+    assert [t["sym"] for t in one] == ["T"]  # naming a symbol still scopes the book to it
+
+
+def test_trades_come_back_in_settlement_order(tmp_path, history):
+    """The drawdown is an equity curve, so it has to follow the cash, not the entries.
+
+    A long-dated contract opened first settles last, so entry order and settlement order cross.
+    """
+    entries = (("2026-01-05", "2026-03-13"), ("2026-01-06", "2026-02-06"))
+    dated_history(history, through="2026-03-13")
+    db = recorded_db(tmp_path, entries=entries, quotes=((9.5, -0.30, 0.40, 0.42),))
+    trades, still_open = replay("T", Filters(capital=2000, dte_max=70), path=db, max_per_sym=2)
+
+    assert [(t["entry"], t["exp"]) for t in trades] == [
+        ("2026-01-06", "2026-02-06"),  # entered second, settles first
+        ("2026-01-05", "2026-03-13"),
+    ]
+    assert still_open == []
+    kept, assigned = (t["pl"] for t in trades)  # kept in full, then assigned 0.30 deep
+    assert kept == 40.0 and abs(assigned - 10.0) < 1e-9
+    s = replay_stats(trades)
+    assert s["tied"] == 1900.0 and s["drawdown"] == 0.0
+    assert (s["days"], s["deployed"]) == (67, 31 + 67)
+
+
+def test_peak_committed_counts_overlap_not_the_biggest_single_trade(tmp_path):
+    def trade(entry, exp, collat):
+        return dict(entry=entry, exp=exp, collat=collat)
+
+    overlapping = [trade("2026-01-05", "2026-02-06", 900), trade("2026-01-06", "2026-02-06", 950)]
+    assert peak_committed(overlapping) == 1850
+
+    sequential = [trade("2026-01-05", "2026-02-06", 900), trade("2026-02-06", "2026-03-13", 950)]
+    assert peak_committed(sequential) == 950  # the release is applied before the same-day entry

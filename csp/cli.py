@@ -36,20 +36,41 @@ def parse(argv=None):
         action="store_true",
         help=f"günün put zincirlerini {CHAINS.name} dosyasına yaz (backtest verisi)",
     )
-    ap.add_argument("--replay", metavar="SYM", help="kayıtlı zincirlerle gerçek backtest")
+    ap.add_argument(
+        "--replay",
+        metavar="SYM",
+        help="kayıtlı zincirlerle gerçek backtest: tek sembol, virgüllü liste ya da TÜMÜ",
+    )
+    ap.add_argument(
+        "--max-per-symbol",
+        type=int,
+        default=1,
+        metavar="N",
+        help="--replay sırasında aynı sembolde en fazla kaç açık pozisyon (varsayılan 1)",
+    )
     ap.add_argument("--version", action="version", version=f"csp {__version__}")
     return ap.parse_args(argv)
 
 
-def run_replay(sym, f):
-    trades = replay(sym, f)
-    stats = replay_stats(trades)
+ALL = {"TÜMÜ", "TUMU", "ALL"}
+
+
+def run_replay(spec, f, max_per_sym=1):
+    syms = None if spec.strip().upper() in ALL else [s for s in spec.upper().split(",") if s.strip()]
+    trades, still_open = replay(syms, f, max_per_sym=max_per_sym)
+    stats = replay_stats(trades, still_open)
     if not stats:
+        who = "TÜMÜ" if syms is None else ",".join(syms)
+        if still_open:
+            sys.exit(
+                f"{who}: {len(still_open)} kontrat seçildi ama hiçbirinin vadesi henüz geçmedi.\n"
+                "Geçmiş, kaydetmeye başladığın günden ileri doğru birikiyor."
+            )
         sys.exit(
-            f"{sym.upper()}: kayıtlı zincir yok ya da hiç kontrat filtreleri geçmedi.\n"
+            f"{who}: kayıtlı zincir yok ya da hiç kontrat filtreleri geçmedi.\n"
             "Veri biriktirmek için her gün: csp --universe --snapshot"
         )
-    print_trades(trades, stats)
+    print_trades(trades, stats, still_open)
 
 
 def run_snapshot(tickers):
@@ -104,7 +125,7 @@ def dispatch(argv=None):
     f = Filters(capital=a.capital, allow_earnings=a.allow_earnings)
 
     if a.replay:
-        return run_replay(a.replay, f)
+        return run_replay(a.replay, f, a.max_per_symbol)
 
     tickers = [t.upper() for t in a.tickers] or (
         universe(a.capital, a.universe) if a.universe else load_watchlist()

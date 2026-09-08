@@ -42,6 +42,7 @@ csp NOK SOFI --capital 2000           # tek seferlik tablo
 csp NOK SOFI --explain                # her satırın altına düz Türkçe okuma
 csp --universe --snapshot             # bugünün put zincirlerini diske yaz (günlük cron)
 csp --replay NOK --capital 2000       # kayıtlı zincirlerle gerçek backtest
+csp --replay TÜMÜ --capital 5000      # kaydettiğin her sembol, tek portföy olarak
 ```
 
 TUI tuşları: `?` **yardım — her kolonun ne demek olduğu** · `↑↓`/`jk` gezin ·
@@ -196,23 +197,39 @@ Toplu veri satın alırsan (OptionsDX/dolt) aynı 10 kolonluk tabloya yükle; `-
 ### `--replay SYM` ne yapıyor
 
 Kayıtlı zincirleri gün gün gezip **tarayıcının kendi filtreleriyle ve kendi skoruyla** kontrat
-seçiyor, sonra vadeye kadar tutuyor:
+seçiyor, sonra vadeye kadar tutuyor. Bir portföy simülasyonu: girişleri sınırlayan tek şey nakit.
 
 - giriş fiyatı **kaydedilen bid** — gördüğün mid değil, gerçekten alacağın fiil
-- aynı anda tek pozisyon; yeni giriş ancak öncekinin vadesi geçtikten sonra
+- her gün önce vadesi gelenler uzlaşıyor, sonra serbest kalan nakitle en yüksek skorlu kontratlar
+  sırayla dolduruluyor; sermaye bitince durur
+- aynı sembolde en fazla `--max-per-symbol` açık pozisyon (varsayılan 1), yoksa tek isim kitabın
+  tamamı olabilir
+- `--replay TÜMÜ` kaydettiğin bütün sembolleri tek bir kitap olarak sürüyor
 - uzlaşma: vade gününün gerçek kapanışı (CBOE günlük barları), `prim×100 + min(0, S_T − strike)×100`
 - RV bileşeni o güne kadarki kapanışlarla hesaplanıyor — ileriye bakış yok
+- vadesi henüz geçmemiş kontrat sonuç değil: "hâlâ açık" diye ayrı raporlanıyor, P&L'e girmiyor
 - roll yok, erken kapatma yok, wheel yok, kazanç filtresi yok (geçmiş kazanç tahminleri kayıtlı değil)
 
-```
-     giriş       vade  dte  strike   prim    spot  uzlaşma  skor    P&L$
-2026-04-11 2026-05-19   38    9.00   0.25   10.03    13.67    57     +25
-2026-06-10 2026-07-18   38    9.00   0.25   10.03    10.12    38     +25
+Özet satırları portföy diliyle konuşuyor: **aynı anda bloke edilen tepe** nakit (en büyük tek
+teminat değil), kitabın **takvim günü** ömrü (boşta geçen günler dahil) ve bunun yanında
+bilgi olarak pozisyon-günü. Yıllık getiri tepe teminata ve takvim gününe göre — yani boşta
+duran nakit de paydada.
 
-2 işlem · 76 gün pozisyonda · toplam +$50 · işlem başına +$25 · en kötü +$25
-kazanan %100 · atanan %0 · en kötü seri +$0 · bloke edilen tepe $900
-teminata göre yıllık %26.7
 ```
+sym        giriş       vade  dte  strike   prim    spot  uzlaşma  skor    P&L$
+NOK   2026-01-05 2026-02-06   32    9.00   0.25   10.00    10.00    44     +25
+SOFI  2026-01-05 2026-02-06   32   17.00   0.64   18.00    18.00    49     +64
+NOK   2026-02-09 2026-03-13   32    9.00   0.25   10.00    10.00    44     +25
+SOFI  2026-02-09 2026-03-13   32   17.00   0.64   18.00    18.00    49     +64
+
+4 işlem · 2 sembol · 2026-01-05 → 2026-03-13 · 67 takvim günü · 128 pozisyon-günü
+toplam +$178 · işlem başına +$44 · en kötü +$25
+kazanan %100 · atanan %0 · en kötü seri +$0 · aynı anda bloke edilen tepe $2600
+tepe teminata göre yıllık %37.3  (boşta geçen günler dahil)
+```
+
+Satırlar **vade sırasında**, yani nakdin gerçekten geldiği sırada; birkaç kontrat aynı anda
+açıkken bu giriş sırasından farklı oluyor ve "en kötü seri" ancak bu sırayla anlamlı.
 
 (Yukarısı motoru gerçek NOK kotasyonlarını geçmişe kaydırarak sürdüğüm duman testi; `spot`
 kolonu o yüzden bugünün spotu. Tek günlük gerçek kayıtla `--replay` haklı olarak boş dönüyor:
@@ -220,8 +237,8 @@ kayıtlı vadelerin hiçbiri henüz geçmedi.)
 
 ## Yapılmayanlar
 
-Roll / erken kapatma / wheel (atanan hisseyi covered call'a çevirme) simülasyonu, çoklu eş
-zamanlı pozisyon ve portföy düzeyinde sermaye tahsisi, toplu geçmiş zincir importer'ı
+Roll / erken kapatma / wheel (atanan hisseyi covered call'a çevirme) simülasyonu, toplu
+geçmiş zincir importer'ı
 (OptionsDX/dolt CSV → SQLite), pozisyon defteri/günlük, temel-iflas riski (Merton
 distance-to-default), faktör yoğunlaşma cezası, IV rank/percentile, otomatik yenileme.
 `--replay` bugün yalnız kendi kaydettiğin günleri görüyor: geçmiş, kaydetmeye başladığın

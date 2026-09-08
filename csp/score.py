@@ -118,9 +118,15 @@ def score_contract(spot, iv, rv30, strike, dte, bid, ask, oi):
     return round(100 * sum(W[k] * v for k, v in c.items())), c, mid, rel_spread, roc_ann, cushion
 
 
-def passes(f, dte, strike, bid, ask, delta, oi):
-    """The hard cuts, in one place: the scan and the replay must agree on what is tradeable."""
-    if not f.dte_min <= dte <= f.dte_max or strike * 100 > f.capital:
+def passes(f, dte, strike, bid, ask, delta, oi, cash=None):
+    """The hard cuts, in one place: the scan and the replay must agree on what is tradeable.
+
+    `cash` is the collateral actually available right now, which is the whole account for a live
+    scan but only the uncommitted part of it once the replay holds positions. It defaults to
+    `f.capital`, so a caller that does not think in portfolios cannot get this wrong.
+    """
+    cash = f.capital if cash is None else cash
+    if not f.dte_min <= dte <= f.dte_max or strike * 100 > cash:
         return False
     if bid <= 0 or ask <= 0 or (ask - bid) / ((ask + bid) / 2) > f.max_spread:
         return False

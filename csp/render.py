@@ -36,7 +36,7 @@ COLUMNS = [
 SORTS = [("score", -1), ("ev", -1), ("roc", -1), ("iv30", -1), ("cushion", -1), ("spread", 1), ("dte", 1)]
 
 HDR_TRADES = (
-    f"{'giriş':>10} {'vade':>10} {'dte':>4} {'strike':>7} {'prim':>6} {'spot':>7} "
+    f"{'sym':<5} {'giriş':>10} {'vade':>10} {'dte':>4} {'strike':>7} {'prim':>6} {'spot':>7} "
     f"{'uzlaşma':>8} {'skor':>5} {'P&L$':>7}"
 )
 
@@ -102,19 +102,32 @@ def explain(row, px=None):
     return out
 
 
-def print_trades(trades, stats):
+def print_trades(trades, stats, still_open=()):
+    """Settled trades in expiry order, then the portfolio's own numbers.
+
+    The rows are the equity curve: they are ordered the way the cash actually arrived, not the
+    way the positions were opened, because with several contracts running at once those differ.
+    """
     print(HDR_TRADES)
     for t in trades:
         print(
-            f"{t['entry']:>10} {t['exp']:>10} {t['dte']:>4} {t['strike']:>7.2f} "
+            f"{t['sym']:<5} {t['entry']:>10} {t['exp']:>10} {t['dte']:>4} {t['strike']:>7.2f} "
             f"{t['credit']:>6.2f} {t['spot']:>7.2f} {t['settle']:>8.2f} {t['score']:>5} "
             f"{t['pl']:>+7.0f}"
         )
     s = stats
-    print(f"\n{s['n']} işlem · {s['first']} → {s['last']} · {s['days']} gün pozisyonda")
+    print(
+        f"\n{s['n']} işlem · {s['syms']} sembol · {s['first']} → {s['last']} · {s['days']} takvim günü"
+        f" · {s['deployed']} pozisyon-günü"
+    )
     print(f"toplam {usd(s['total'])} · işlem başına {usd(s['mean'])} · en kötü {usd(s['worst'])}")
     print(
         f"kazanan %{s['wins'] * 100:.0f} · atanan %{s['assigned'] * 100:.0f} · "
-        f"en kötü seri {usd(s['drawdown'])} · bloke edilen tepe ${s['tied']:.0f}"
+        f"en kötü seri {usd(s['drawdown'])} · aynı anda bloke edilen tepe ${s['tied']:.0f}"
     )
-    print(f"teminata göre yıllık %{s['ann'] * 100:.1f}  (pozisyonda geçen günlerle ölçekli)")
+    print(f"tepe teminata göre yıllık %{s['ann'] * 100:.1f}  (boşta geçen günler dahil)")
+    for p in still_open:
+        print(
+            f"  hâlâ açık: {p['sym']} {p['strike']:.2f} PUT · giriş {p['entry']} · vade {p['exp']}"
+            f" · ${p['collat']:.0f} bloke  (vadesi geçmedi, sonuçlara girmiyor)"
+        )
