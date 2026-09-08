@@ -1,8 +1,13 @@
 """One JSON GET, rate-limited.
 
-CBOE sits behind Cloudflare burst protection and answers roughly 0.4 requests/second from a
-single IP before it starts returning 429 — measured, not guessed. So every request start passes
-through one global gate; downloads themselves overlap across worker threads.
+CBOE sits behind Cloudflare burst protection, so every request *start* passes through one global
+gate spaced MIN_INTERVAL apart; the downloads themselves overlap across worker threads.
+
+Measured on 2026-09-08: 12 chain requests through this gate returned 12x200, no 429. The gate
+therefore sustains ~2.9 requests/second, not the 0.4 an earlier version of this docstring
+claimed — that figure confused the interval (0.35 s per request) with a rate. A short burst is
+not proof about a 180-request universe scan, so the interval stays where it is until someone
+measures sustained load; loosening it costs the user's IP, not ours.
 """
 
 import gzip
@@ -19,7 +24,7 @@ UA = {
     "Accept-Encoding": "gzip",
 }
 
-MIN_INTERVAL = 0.35
+MIN_INTERVAL = 0.35  # seconds between request starts, i.e. ~2.9 req/s, not 0.35 req/s
 _last = [0.0]
 _gate = threading.Lock()
 

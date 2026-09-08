@@ -79,8 +79,8 @@ Filtreler artık dosyanın başında global sabitler değil, `Filters` dataclass
 
 ## Neden bağımlılık yok
 
-Darboğaz CBOE'nin ~0.4 istek/sn hız sınırı — bir HTTP kütüphanesi (requests/httpx) burada
-zaman kazandırmıyor, kazandıran şey rate gate. Hesap tarafındaki iş milisaniye altı; numpy/pandas
+Darboğaz CBOE'nin hız sınırı — bir HTTP kütüphanesi (requests/httpx) burada zaman
+kazandırmıyor, kazandıran şey rate gate. Hesap tarafındaki iş milisaniye altı; numpy/pandas
 gerekçesi yok. `curses` zaten full-screen TUI veriyor: Textual/Rich gibi bir kütüphane 15 MB'lık
 bağımlılığı ~40 satırlık kaydırma/kolon kırpma koduyla takas ederdi — kötü bir takas.
 Geliştirme tarafında `pytest` ve `ruff` var — ikisi de çalışma zamanına girmiyor.
@@ -92,8 +92,12 @@ Geliştirme tarafında `pytest` ve `ruff` var — ikisi de çalışma zamanına 
 geçiriliyor; hacme göre en işlek N tanesi taranıyor. $2000 sermayede bu ~1500 aday demek, o yüzden
 kesim ağdan **önce** yapılıyor. Liste `~/.csp_universe.json`'da gün boyu duruyor.
 
-Maliyet dürüstçe: CBOE tek IP'den ~0.4 istek/sn'den fazlasına 429 veriyor — 8 iş parçacığı ve
-0.35 sn'lik kapıya rağmen 60 sembollük ilk tarama ~2-3 dakika. Sonraki filtre değişiklikleri
+Maliyet dürüstçe: kapı istek başlangıçları arasında 0.35 sn bırakıyor, yani ~2.9 istek/sn.
+60 sembollük ilk tarama en fazla ~180 istek (zincir + günlük barlar + kazanç tarihi) = kağıt
+üzerinde ~1 dakika; aynı gün içindeki sonraki taramalar barları ve kazanç tarihlerini cache'ten
+okuduğu için ~20 saniyeye iniyor. Ölçülen (2026-09-08): 12 zincir isteği, sıfır 429. Sürekli
+yükte 429 çıkarsa `Retry-After` + `2**i` geri çekilmesi süreyi birkaç katına çıkarabilir — bunu
+kimse 180 istekte ölçmedi, o yüzden 0.35 sn olduğu yerde duruyor. Sonraki filtre değişiklikleri
 bedava (zincir cache'i), yalnız `r` yeniden ağa çıkıyor.
 
 ## Veri
@@ -222,8 +226,8 @@ zamanlı pozisyon ve portföy düzeyinde sermaye tahsisi, toplu geçmiş zincir 
 distance-to-default), faktör yoğunlaşma cezası, IV rank/percentile, otomatik yenileme.
 `--replay` bugün yalnız kendi kaydettiğin günleri görüyor: geçmiş, kaydetmeye başladığın
 günden ileri doğru birikiyor.
-Evren taraması CBOE'nin hız sınırına takılı: 60 sembol ~2-3 dakika, paralellik bunu ancak
-2 katına indiriyor. 5 karakterden uzun sembol tablo kolonlarını kaydırır.
+Evren taraması CBOE'nin hız sınırına takılı: kapı seri, paralellik yalnız indirmeleri
+örtüştürüyor. 5 karakterden uzun sembol tablo kolonlarını kaydırır.
 
 ## Uyarı
 

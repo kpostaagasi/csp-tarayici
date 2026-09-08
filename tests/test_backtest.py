@@ -12,7 +12,7 @@ def contract(row, **over):
 
 def bt_row(row):
     """A round-numbered contract so every expected P&L is checkable by hand."""
-    return contract(row, sym="X", spot=100.0, strike=90.0, mid=0.50, dte=30, delta=-0.25, ev=None)
+    return contract(row, sym="X", spot=100.0, strike=90.0, mid=0.50, dte=30, delta=-0.25, ev_n=None)
 
 
 def test_flat_history_keeps_the_whole_credit(row):
@@ -48,7 +48,10 @@ def test_ev_is_memoized_on_the_row(row, history):
     assert ev(r) == 50.0 and r.ev == 50.0
     history("X", [100.0] * 200 + [50.0] * 200)  # a re-read would change the answer
     assert ev(r) == 50.0
-    assert ev(contract(bt_row(row), sym="NOHIST")) == 0.0  # no history: 0, so sorting still works
+    nohist = contract(bt_row(row), sym="NOHIST")
+    assert ev(nohist) == 0.0  # no history: 0, so sorting still works...
+    assert nohist.ev_n == 0  # ...but the row still knows it was never measured
+    assert r.ev_n == 400 - 21
 
 
 # ------------------------------------------------------------------ replay of recorded chains

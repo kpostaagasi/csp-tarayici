@@ -26,7 +26,7 @@ COLUMNS = [
     (f"{'sprd%':>6}", lambda r: f"{r.spread * 100:>6.1f}", 6),
     (f"{'OI':>7}", lambda r: f"{r.oi:>7.0f}", 8),
     (f"{'$col':>6}", lambda r: f"{r.collat:>6.0f}", 2),
-    (f"{'EV$':>6}", lambda r: f"{ev(r):>6.0f}", 1),
+    (f"{'EV$':>6}", lambda r: ev_cell(r), 1),
     (f"{'vrp':>4}", lambda r: f"{r.parts['vrp']:>4.2f}", 11),
     (f"{'liq':>4}", lambda r: f"{r.parts['liq']:>4.2f}", 12),
     (f"{'yld':>4}", lambda r: f"{r.parts['yield']:>4.2f}", 13),
@@ -43,6 +43,16 @@ HDR_TRADES = (
 
 def usd(v):
     return f"{'-' if v < 0 else '+'}${abs(v):.0f}"
+
+
+def ev_cell(row):
+    """EV$, or an em dash when there was never enough price history to measure one.
+
+    A printed 0 reads as "this contract breaks even historically", which is a claim; no data is
+    not that claim. The explanation panel has always drawn the distinction, the table had not.
+    """
+    v = ev(row)
+    return f"{'—':>6}" if row.ev_n == 0 else f"{v:>6.0f}"
 
 
 def columns(width):

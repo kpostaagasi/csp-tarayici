@@ -35,9 +35,11 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
 ```
 
 - **`http.py`** — one `get(url)`. A single process-wide lock enforces `MIN_INTERVAL = 0.35s`
-  *between request starts*; CBOE 429s above ~0.4 req/s from one IP. Downloads themselves
-  overlap across threads. This gate, not CPU or JSON parsing, is why a 60-symbol scan takes
-  2-3 minutes, and it is why adding an HTTP library would buy nothing.
+  *between request starts* (~2.9 req/s — an earlier docstring called this "0.4 requests/second",
+  confusing the interval with a rate). Downloads themselves overlap across threads. This gate,
+  not CPU or JSON parsing, is what a scan's wall clock is made of, and it is why adding an HTTP
+  library would buy nothing. Measured 2026-09-08: 12 chain requests through the gate, no 429.
+  Sustained load at 180 requests is unmeasured, so do not loosen the interval on that sample.
 - **`cache.py`** — dotfiles in `$HOME` (`.csp_hist.json`, `.csp_earnings.json`,
   `.csp_universe.json`, `.csp_watchlist.json`, `.csp_chains.db`). Writes re-read under a lock
   because scans are parallel; a half-written file is treated as an empty cache, never a

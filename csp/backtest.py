@@ -46,10 +46,15 @@ def backtest(row, px):
 
 
 def ev(row):
-    """Mean historical P&L of this exact contract, dollars. Memoized: the UI redraws 5x a second."""
-    if row.ev is None:
+    """Mean historical P&L of this exact contract, dollars. Memoized: the UI redraws 5x a second.
+
+    `row.ev_n` carries how many windows that mean rests on, so a symbol with no usable price
+    history (ev_n == 0) stays distinguishable from one that really does average zero. Sorting
+    still gets a number; only the renderer is allowed to care about the difference.
+    """
+    if row.ev_n is None:
         bt = backtest(row, known_closes(row.sym))
-        row.ev = bt["mean"] if bt else 0.0
+        row.ev, row.ev_n = (bt["mean"], bt["n"]) if bt else (0.0, 0)
     return row.ev
 
 

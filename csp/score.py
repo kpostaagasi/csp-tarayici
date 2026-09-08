@@ -58,7 +58,8 @@ class Candidate:
     score: int
     parts: dict
     earn: dt.date | None = None
-    ev: float | None = field(default=None)  # memoized by backtest.ev(); None = not computed yet
+    ev: float = 0.0  # memoized mean historical P&L, dollars; only meaningful once ev_n is set
+    ev_n: int | None = field(default=None)  # windows behind ev. None = not computed, 0 = unmeasurable
 
 
 def parse_occ(s):

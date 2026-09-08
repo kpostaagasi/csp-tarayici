@@ -66,19 +66,31 @@ def close_on(sym, iso):
     return px[i - 1] if i and ds[-1] >= iso else None
 
 
+ERR_TTL_DAYS = 1  # a vendor outage must not be remembered as long as a real answer
+
+
 def earnings_date(sym, ttl_days=7):
-    """Estimated next report date. Cached: it moves once a quarter, not once a scan."""
+    """Estimated next report date. Cached: it moves once a quarter, not once a scan.
+
+    Failures are cached too, for a shorter day: Nasdaq refusing one symbol used to cost a fresh
+    request on every scan, and every request spends the CBOE rate gate that the scan is queued
+    behind. A cached failure still reads as "no known event" — it never invents a date.
+    """
     sym = sym.upper()
+    today = dt.date.today()
     hit = cached(EARNINGS).get(sym)
-    if hit and (dt.date.today() - dt.date.fromisoformat(hit["at"])).days < ttl_days:
-        return dt.date.fromisoformat(hit["d"]) if hit["d"] else None
+    if hit:
+        ttl = ERR_TTL_DAYS if hit.get("err") else ttl_days
+        if (today - dt.date.fromisoformat(hit["at"])).days < ttl:
+            return dt.date.fromisoformat(hit["d"]) if hit["d"] else None
     try:
         txt = get(f"https://api.nasdaq.com/api/analyst/{sym}/earnings-date")["data"]["reportText"]
         m = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", txt)
         d = dt.datetime.strptime(m.group(1), "%m/%d/%Y").date() if m else None
     except Exception:
+        store(EARNINGS, sym, {"d": None, "at": today.isoformat(), "err": True})
         return None  # unknown date: treated as "no known event"
-    store(EARNINGS, sym, {"d": d.isoformat() if d else None, "at": dt.date.today().isoformat()})
+    store(EARNINGS, sym, {"d": d.isoformat() if d else None, "at": today.isoformat()})
     return d
 
 
