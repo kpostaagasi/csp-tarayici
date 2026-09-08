@@ -15,7 +15,7 @@ brew trust kpostaagasi/csp                    # Homebrew 6+ üçüncü taraf tap
 brew install kpostaagasi/csp/csp-tarayici
 ```
 
-Ya da PyPI'dan (paket yayınlandıktan sonra geçerli):
+Ya da PyPI'dan:
 
 ```bash
 uv tool install csp-tarayici
