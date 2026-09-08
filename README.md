@@ -11,7 +11,9 @@ kendi kaydettiği zincirlerle çalışan gerçek bir backtest motoru var.
 ## Kurulum
 
 ```bash
-brew install kpostaagasi/csp/csp-tarayici     # sonra: csp --universe --tui
+brew trust kpostaagasi/csp                    # Homebrew 6+ üçüncü taraf tap'ler için şart
+brew install kpostaagasi/csp/csp-tarayici
+csp --universe --tui
 ```
 
 Ya da klonla — tek dosya, bağımlılık yok:
