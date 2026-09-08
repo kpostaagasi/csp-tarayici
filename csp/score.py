@@ -175,16 +175,21 @@ def scan_all(tickers, f, today=None, on_done=None):
     rows, errs = [], []
     with cf.ThreadPoolExecutor(WORKERS) as ex:
         jobs = {ex.submit(scan_symbol, t, f, today): t for t in tickers}
-        for n, fut in enumerate(cf.as_completed(jobs), 1):
-            sym, got, err = jobs[fut], [], None
-            try:
-                got = fut.result()
-            except Exception as e:
-                err = f"{sym}: {type(e).__name__} {e}"
-                errs.append(err)
-            rows += got
-            if on_done:
-                on_done(n, sym, got, err)
+        try:
+            for n, fut in enumerate(cf.as_completed(jobs), 1):
+                sym, got, err = jobs[fut], [], None
+                try:
+                    got = fut.result()
+                except Exception as e:
+                    err = f"{sym}: {type(e).__name__} {e}"
+                    errs.append(err)
+                rows += got
+                if on_done:
+                    on_done(n, sym, got, err)
+        except BaseException:            # Ctrl-C: drop the queue, or the executor drains it first
+            for fut in jobs:
+                fut.cancel()
+            raise
     return rows, errs
 
 

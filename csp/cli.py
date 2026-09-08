@@ -91,6 +91,15 @@ def run_scan(tickers, a, f):
 
 
 def main(argv=None):
+    """Every path funnels through here, so Ctrl-C is caught once, not in each command."""
+    try:
+        return dispatch(argv)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)         # the shell prompt should not land mid-line
+        return 130                     # 128 + SIGINT, what a shell expects
+
+
+def dispatch(argv=None):
     a = parse(argv)
     f = Filters(capital=a.capital, allow_earnings=a.allow_earnings)
 
