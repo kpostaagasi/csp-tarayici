@@ -82,7 +82,7 @@ Filtreler artık dosyanın başında global sabitler değil, `Filters` dataclass
 Darboğaz CBOE'nin ~0.4 istek/sn hız sınırı — bir HTTP kütüphanesi (requests/httpx) burada
 zaman kazandırmıyor, kazandıran şey rate gate. Hesap tarafındaki iş milisaniye altı; numpy/pandas
 gerekçesi yok. `curses` zaten full-screen TUI veriyor: Textual/Rich gibi bir kütüphane 15 MB'lık
-bağımlılıkla ~40 satırlık kaydırma/kolon kırpma kodunu değiştirirdi, kazanç orantısız yok.
+bağımlılığı ~40 satırlık kaydırma/kolon kırpma koduyla takas ederdi — kötü bir takas.
 Geliştirme tarafında `pytest` ve `ruff` var — ikisi de çalışma zamanına girmiyor.
 
 ## Evren
