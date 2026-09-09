@@ -77,11 +77,22 @@ cli.py ──► tui.py ──► render.py ──► backtest.py ──► scor
 
 ### Invariants worth preserving
 
-- **`score.passes()` is shared by the live scan and `replay()`** — that shared call is what makes
+- **`score.reject()` is shared by the live scan and `replay()`** — that shared call is what makes
   the backtest a test of the scanner rather than of a second, drifting rule set. Add a hard cut
-  there, not in a caller. Its `cash` argument is the collateral available *right now* (the whole
-  account for a scan, the uncommitted part for a portfolio replay) and defaults to `f.capital`,
-  so a caller that does not think in portfolios cannot get it wrong.
+  there, not in a caller. It returns `None` for a tradeable contract, else the *name* of the
+  first cut it fails (`dte`, `cash`, `ivr`, `delta`, `quote`, `spread`, `oi`), and that order is
+  chosen for what the name says, not for arithmetic: identity cuts (window, collateral, IV rank
+  floor) before the delta band, liquidity last, so a far wing with no bid reports `delta` rather
+  than `quote`. Its `cash` argument is the collateral available *right now* (the whole account
+  for a scan, the uncommitted part for a portfolio replay) and defaults to `f.capital`, so a
+  caller that does not think in portfolios cannot get it wrong.
+- **A symbol that produced no rows still has something to say.** `scan_symbol()` returns
+  `(rows, why)` and `scan_all()` returns `(rows, errs, why)`, where `why` counts the cut each
+  rejected contract hit. `dte` is deliberately *not* counted — every chain has hundreds of
+  weeklies and LEAPs outside the window, and a "300 dte" line would bury the knob that can be
+  moved. An empty tally therefore means "nothing ever reached the window", which `render.WHY` /
+  `why_line()` says in those words. The CLI prints the top three cuts per dropped symbol; the
+  TUI puts the top cut per symbol on the last panel line.
 - **`Filters` is one mutable object** flowing CLI → scan → TUI → backtest. TUI keys mutate it
   in place and rescan.
 - **`snapshot()` stamps rows with the vendor's session, not `date.today()`** — derived from the

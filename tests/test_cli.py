@@ -1,5 +1,7 @@
 """The entry point: argument surface, and Ctrl-C during a scan or in the TUI."""
 
+from collections import Counter
+
 import pytest
 
 from csp import cli
@@ -39,7 +41,7 @@ def test_scan_all_cancels_the_queue_on_ctrl_c(monkeypatch):
         calls.append(sym)
         if sym == "A":
             raise KeyboardInterrupt
-        return []
+        return [], Counter()
 
     monkeypatch.setattr("csp.score.scan_symbol", scan)
     monkeypatch.setattr("csp.score.WORKERS", 1)  # deterministic order
@@ -114,12 +116,24 @@ def test_only_unresolved_positions_says_so_instead(monkeypatch):
     assert "vadesi henüz geçmedi" in str(e.value)
 
 
-def test_the_drop_message_names_the_iv_rank_cut_only_when_it_is_on(monkeypatch, capsys):
-    """A symbol dropped by a filter the reader forgot they set is the hardest kind to debug."""
-    monkeypatch.setattr("csp.score.scan_symbol", lambda sym, f, today=None: [])
+def test_the_drop_message_names_the_cut_that_actually_bound(monkeypatch, capsys):
+    """A symbol dropped by a filter the reader forgot they set is the hardest kind to debug,
+
+    and a list of every filter that could have done it is what the reader already knows.
+    """
+    monkeypatch.setattr(
+        "csp.score.scan_symbol", lambda sym, f, today=None: ([], Counter({"delta": 7, "oi": 2}))
+    )
+    cli.main(["NOK"])
+    err = capsys.readouterr().err
+    assert "NOK: 9 kontrat elendi" in err
+    assert "7 delta" in err and "2 OI" in err
+    assert "IV rank" not in err  # a cut that never fired is not named
+
+
+def test_a_symbol_whose_chain_never_reaches_the_dte_window_says_that(monkeypatch, capsys):
+    """Zero counted cuts is not "everything passed": nothing was ever a candidate."""
+    monkeypatch.setattr("csp.score.scan_symbol", lambda sym, f, today=None: ([], Counter()))
 
     cli.main(["NOK"])
-    assert "IV rank" not in capsys.readouterr().err
-
-    cli.main(["NOK", "--min-iv-rank", "0.5"])
-    assert "IV rank" in capsys.readouterr().err
+    assert "DTE penceresinde hiç kontrat yok" in capsys.readouterr().err

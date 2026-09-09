@@ -12,7 +12,7 @@ import threading
 
 from .backtest import ev
 from .cache import WATCH
-from .render import SORTS, explain, table
+from .render import SORTS, WHY, explain, table
 from .score import best_per_symbol, scan_all
 from .sources import forget_chains
 
@@ -36,7 +36,7 @@ HELP = [  # 24 satırlık bir terminalde bile kesilmemeli: kısa tut
     " beklenen hareket, skorun bileşenleri, IV rank ve geçmiş testinin tamamı (atama/zarar %'si,",
     " ortalama, en kötü pencere).",
     " FİLTRELER (başlıkta güncel) — DTE · |delta| · spread · OI · teminat<=sermaye · vade içi kazanç",
-    " · --min-iv-rank. Filtreler listeye girişi belirler, skoru değil.",
+    " · --min-iv-rank. Girişi belirler, skoru değil · 'elendi:' satırı: boş kalan sembol + kesen filtre",
     " TUŞLAR — jk/oklar gez · enter detay · s sırala · a/x sembol · c sermaye · d delta · t dte",
     " · e kazanç filtresi · r veriyi yenile · q geri/çık",
     " VERİ — filtre düğmeleri cache'li zincirleri anında süzer, ağa çıkmaz; yalnız 'r' yeniden çeker.",
@@ -49,17 +49,31 @@ def load_watchlist():
 
 def scan_async(tickers, f, st):
     """Runs in a thread; the UI only ever reads st. Rows appear as each symbol lands."""
-    st.update(rows=[], errs=[], done=0, total=len(tickers), running=True, last="")
+    st.update(rows=[], errs=[], why={}, done=0, total=len(tickers), running=True, last="")
 
-    def landed(n, sym, got, err):
+    def landed(n, sym, got, err, why):
         st["done"], st["last"] = n, sym
         if got:
             st["rows"] = st["rows"] + got  # rebind, never mutate: the UI thread reads this
-        if err:
-            st["errs"] = st["errs"] + [err]
+        elif err:
+            st["errs"] = st["errs"] + [err]  # a vendor error is not a filter verdict
+        else:
+            st["why"] = {**st["why"], sym: why}  # same rule: rebind, the UI thread reads it
 
     scan_all(tickers, f, on_done=landed)
     st["running"] = False
+
+
+def drops_line(why):
+    """One line naming the cut that emptied each symbol, so a knob key has something to aim at.
+
+    The table can only show what survived; with a 60-name universe most of the screen's meaning
+    is in what did not, and "nothing passed" is not a reason.
+    """
+    parts = [
+        f"{s} {WHY.get(w.most_common(1)[0][0], '?')}" if w else f"{s} DTE" for s, w in sorted(why.items())
+    ]
+    return "elendi: " + " · ".join(parts)
 
 
 def ask(stdscr, msg):
@@ -101,7 +115,7 @@ def tui(stdscr, tickers, f, save=True):
     curses.use_default_colors()
     for i, c in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_CYAN), 1):
         curses.init_pair(i, c, -1)
-    st = {"rows": [], "errs": [], "done": 0, "total": 0, "running": False, "last": ""}
+    st = {"rows": [], "errs": [], "why": {}, "done": 0, "total": 0, "running": False, "last": ""}
     sel, sort_i, detail, showing_help = 0, 0, None, False
 
     def remember():  # a --universe run must not overwrite the saved watchlist
@@ -152,6 +166,8 @@ def tui(stdscr, tickers, f, save=True):
 
         hdr, lines = table(rows, w - 1)
         panel = explain(rows[sel])[: max(0, h - 6)] if rows else []
+        if st["why"] and not detail:  # the drops belong to the whole scan, not to one symbol
+            panel = panel + [drops_line(st["why"])]
         vis = max(1, h - 3 - len(panel))
         top_i = max(0, min(sel - vis + 1, len(lines) - vis)) if len(lines) > vis else 0
         stdscr.addstr(1, 0, hdr[: w - 1], curses.A_BOLD)

@@ -11,6 +11,7 @@ import concurrent.futures as cf
 import datetime as dt
 import math
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 
 from .sources import chain, earnings_date, history, recorded_ivs
@@ -100,7 +101,7 @@ def iv_level(quotes):
     """One number for "how expensive is this symbol's vol today", or None.
 
     `quotes` is (dte, iv, delta) for puts, from a live chain or a recorded one — the same call
-    on both sides, for the same reason `passes()` is shared: a rank is only meaningful if today
+    on both sides, for the same reason `reject()` is shared: a rank is only meaningful if today
     and every day it is compared against were measured the same way. Median rather than ATM,
     because which strikes are listed changes and a median survives that.
     """
@@ -198,25 +199,46 @@ def score_contract(spot, iv, rv30, strike, dte, bid, ask, oi):
     return round(100 * sum(W[k] * v for k, v in c.items())), c, mid, rel_spread, roc_ann, cushion
 
 
-def passes(f, dte, strike, bid, ask, delta, oi, cash=None, iv_rank=None):
-    """The hard cuts, in one place: the scan and the replay must agree on what is tradeable.
+def reject(f, dte, strike, bid, ask, delta, oi, cash=None, iv_rank=None):
+    """`None` if the contract is tradeable, else the name of the first cut it fails.
+
+    The hard cuts live here, in one place: the scan and the replay must agree on what is
+    tradeable. Naming the cut instead of returning a bare `False` is what lets a scan say which
+    knob dropped a symbol — with a 60-name universe, "hiçbiri geçmedi" is not an answer.
 
     `cash` is the collateral actually available right now, which is the whole account for a live
     scan but only the uncommitted part of it once the replay holds positions. It defaults to
     `f.capital`, so a caller that does not think in portfolios cannot get this wrong.
+
+    The order below is the order the tally reports, so it is chosen for what it says rather than
+    for arithmetic: first whether this is a contract at all (window, collateral, the symbol-wide
+    IV rank floor), then whether it is one worth selling (delta), and only then how it trades
+    (quote, spread, interest). A 0.02-delta wing with no bid is out of the band, not illiquid.
     """
     cash = f.capital if cash is None else cash
-    if not f.dte_min <= dte <= f.dte_max or strike * 100 > cash:
-        return False
+    if not f.dte_min <= dte <= f.dte_max:
+        return "dte"
+    if strike * 100 > cash:
+        return "cash"
     if f.min_iv_rank is not None and (iv_rank is None or iv_rank < f.min_iv_rank):
-        return False  # asking for a rank floor makes an unrankable symbol a miss, not a pass
-    if bid <= 0 or ask <= 0 or (ask - bid) / ((ask + bid) / 2) > f.max_spread:
-        return False
-    return f.delta_lo <= abs(delta) <= f.delta_hi and oi >= f.min_oi
+        return "ivr"  # asking for a rank floor makes an unrankable symbol a miss, not a pass
+    if not f.delta_lo <= abs(delta) <= f.delta_hi:
+        return "delta"
+    if bid <= 0 or ask <= 0:
+        return "quote"  # no two-sided market at all, which is not the same as a wide one
+    if (ask - bid) / ((ask + bid) / 2) > f.max_spread:
+        return "spread"
+    if oi < f.min_oi:
+        return "oi"
+    return None
 
 
 def scan_symbol(sym, f, today=None):
-    """Every contract of one symbol that survives `f`, scored."""
+    """`(rows, why)`: one symbol's surviving contracts, scored, plus a tally of what cut the rest.
+
+    `why` counts only contracts inside the DTE window — every chain carries hundreds of weeklies
+    and LEAPs outside it, and a "300 dte" line would bury the cut that can actually be moved.
+    """
     sym, today = sym.upper(), today or dt.date.today()
     d = chain(sym)
     spot, iv30 = d["close"] or d["current_price"], d["iv30"]
@@ -229,13 +251,17 @@ def scan_symbol(sym, f, today=None):
             puts.append((exp, strike, o))
     quotes = [((exp - today).days, (o.get("iv") or 0) * 100, o["delta"]) for exp, _, o in puts]
     ivr, ivr_n = iv_rank(iv_level(quotes), iv_levels(sym))
-    out = []
+    out, why = [], Counter()
     for exp, strike, o in puts:
         dte = (exp - today).days
         args = (o["bid"], o["ask"], o["delta"], o["open_interest"])
-        if not passes(f, dte, strike, *args, iv_rank=ivr):
+        bad = reject(f, dte, strike, *args, iv_rank=ivr)
+        if bad:
+            if bad != "dte":  # outside the window is not a near miss, it is not a candidate
+                why[bad] += 1
             continue
         if earn and not f.allow_earnings and today <= earn <= exp:
+            why["earnings"] += 1
             continue
         iv = (o.get("iv") or 0) * 100 or iv30  # chain iv is a fraction; fall back to ATM
         sc, parts, mid, spread, roc, cushion = score_contract(
@@ -265,30 +291,36 @@ def scan_symbol(sym, f, today=None):
                 iv_rank_n=ivr_n,
             )
         )
-    return out
+    return out, why
 
 
 def scan_all(tickers, f, today=None, on_done=None):
-    """Scan symbols in parallel. `on_done(n, sym, rows, err)` fires as each lands, in any order."""
-    rows, errs = [], []
+    """Scan symbols in parallel, returning `(rows, errs, why)`.
+
+    `why` maps a symbol to its tally of failed cuts, which is the only thing a symbol that
+    produced no rows has to say. `on_done(n, sym, rows, err, why)` fires as each lands, in any
+    order, so a UI can report a drop while the rest of the scan is still running.
+    """
+    rows, errs, whys = [], [], {}
     with cf.ThreadPoolExecutor(WORKERS) as ex:
         jobs = {ex.submit(scan_symbol, t, f, today): t for t in tickers}
         try:
             for n, fut in enumerate(cf.as_completed(jobs), 1):
-                sym, got, err = jobs[fut], [], None
+                sym, got, why, err = jobs[fut], [], Counter(), None
                 try:
-                    got = fut.result()
+                    got, why = fut.result()
                 except Exception as e:
                     err = f"{sym}: {type(e).__name__} {e}"
                     errs.append(err)
                 rows += got
+                whys[sym] = why
                 if on_done:
-                    on_done(n, sym, got, err)
+                    on_done(n, sym, got, err, why)
         except BaseException:  # Ctrl-C: drop the queue, or the executor drains it first
             for fut in jobs:
                 fut.cancel()
             raise
-    return rows, errs
+    return rows, errs, whys
 
 
 def best_per_symbol(rows):

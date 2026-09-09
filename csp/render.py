@@ -56,6 +56,29 @@ HDR_TRADES_EARLY = (
     f"{'spot':>7} {'uzlaşma':>8} {'skor':>5} {'P&L$':>7}"
 )
 
+# `score.reject()` names the cut in English; only this table speaks to the user.
+WHY = {
+    "cash": "sermaye",
+    "ivr": "IV rank",
+    "quote": "çift taraflı kotasyon yok",
+    "spread": "spread",
+    "delta": "delta",
+    "oi": "OI",
+    "earnings": "vade içi kazanç",
+}
+
+
+def why_line(sym, why):
+    """Why a symbol produced no rows: the cuts that actually bound, biggest first.
+
+    The alternative — listing every filter that could have done it — is what a reader already
+    knows. Naming the count per cut is what tells them which knob to move, and by how much.
+    """
+    if not why:
+        return f"{sym}: DTE penceresinde hiç kontrat yok"
+    top = " · ".join(f"{n} {WHY.get(k, k)}" for k, n in why.most_common(3))
+    return f"{sym}: {sum(why.values())} kontrat elendi · {top}"
+
 
 def usd(v):
     return f"{'-' if v < 0 else '+'}${abs(v):.0f}"

@@ -18,7 +18,7 @@ from csp.score import (
     iv_rank,
     levels_upto,
     median,
-    passes,
+    reject,
 )
 
 
@@ -134,15 +134,15 @@ BASE = dict(dte=30, strike=9.0, bid=0.30, ask=0.32, delta=-0.25, oi=500)
 
 
 def test_min_iv_rank_is_off_by_default():
-    assert passes(Filters(capital=1000), **BASE)  # no rank supplied, no rank demanded
-    assert passes(Filters(capital=1000), **BASE, iv_rank=0.01)
+    assert reject(Filters(capital=1000), **BASE) is None  # no rank supplied, no rank demanded
+    assert reject(Filters(capital=1000), **BASE, iv_rank=0.01) is None
 
 
 def test_min_iv_rank_cuts_cheap_vol_and_unrankable_symbols():
     f = Filters(capital=1000, min_iv_rank=0.5)
-    assert passes(f, **BASE, iv_rank=0.5)
-    assert not passes(f, **BASE, iv_rank=0.49)
-    assert not passes(f, **BASE, iv_rank=None)  # asking for a floor makes "unknown" a miss
+    assert reject(f, **BASE, iv_rank=0.5) is None
+    assert reject(f, **BASE, iv_rank=0.49) == "ivr"
+    assert reject(f, **BASE, iv_rank=None) == "ivr"  # asking for a floor makes "unknown" a miss
 
 
 def test_the_replay_applies_the_floor_with_the_rank_of_that_day(tmp_path, history):

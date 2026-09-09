@@ -17,8 +17,8 @@ from .score import (
     levels_upto,
     occ,
     parse_occ,
-    passes,
     realized_vol,
+    reject,
     score_contract,
 )
 from .sources import chain, close_on, known_closes, session_date
@@ -232,7 +232,7 @@ def replay(syms, f, path=None, max_per_sym=1, take_profit=None):
                 seen = levels_upto(levels[sym], date)  # the rank as it was knowable that day
                 today_level = seen[-1][1] if seen and seen[-1][0] == date else None
                 ivr[sym, date] = iv_rank(today_level, seen)[0]
-            if not passes(f, dte, strike, bid, ask, delta, oi, cash=free, iv_rank=ivr[sym, date]):
+            if reject(f, dte, strike, bid, ask, delta, oi, cash=free, iv_rank=ivr[sym, date]):
                 continue
             if (sym, date) not in rv:
                 rv[sym, date] = realized_vol(sym, before=date)  # only closes up to that day

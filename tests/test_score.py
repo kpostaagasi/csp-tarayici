@@ -2,6 +2,7 @@
 
 import datetime as dt
 import math
+from collections import Counter
 
 import pytest
 
@@ -12,8 +13,9 @@ from csp.score import (
     clip01,
     occ,
     parse_occ,
-    passes,
+    reject,
     rv_from_closes,
+    scan_symbol,
     score_contract,
 )
 
@@ -80,16 +82,71 @@ def test_cushion_grows_with_distance():
     assert abs(math.sqrt(30 / 365) - 0.28669) < 1e-4
 
 
-def test_filters_cut_on_every_axis():
+def test_filters_cut_on_every_axis_and_name_the_cut():
     f = Filters(capital=1000)
     ok = dict(dte=30, strike=9.0, bid=0.30, ask=0.32, delta=-0.25, oi=500)
-    assert passes(f, **ok)
-    assert not passes(f, **{**ok, "dte": 7})  # outside the DTE band
-    assert not passes(f, **{**ok, "dte": 90})
-    assert not passes(f, **{**ok, "strike": 11.0})  # $1100 collateral, $1000 cash
-    assert not passes(f, **{**ok, "bid": 0.0})  # no bid: not tradeable
-    assert not passes(f, **{**ok, "ask": 0.60})  # spread way over the cap
-    assert not passes(f, **{**ok, "delta": -0.05})  # too far out
-    assert not passes(f, **{**ok, "delta": -0.60})  # too deep
-    assert not passes(f, **{**ok, "oi": 5})  # nobody trades it
-    assert passes(Filters(capital=1000, min_oi=1), **{**ok, "oi": 5})  # ...unless you allow it
+    assert reject(f, **ok) is None
+    assert reject(f, **{**ok, "dte": 7}) == "dte"  # outside the DTE band
+    assert reject(f, **{**ok, "dte": 90}) == "dte"
+    assert reject(f, **{**ok, "strike": 11.0}) == "cash"  # $1100 collateral, $1000 cash
+    assert reject(f, **{**ok, "bid": 0.0}) == "quote"  # no bid: not a market, not a wide one
+    assert reject(f, **{**ok, "ask": 0.60}) == "spread"  # spread way over the cap
+    assert reject(f, **{**ok, "delta": -0.05}) == "delta"  # too far out
+    assert reject(f, **{**ok, "delta": -0.60}) == "delta"  # too deep
+    assert reject(f, **{**ok, "oi": 5}) == "oi"  # nobody trades it
+    assert reject(Filters(capital=1000, min_oi=1), **{**ok, "oi": 5}) is None  # unless you allow it
+
+
+def test_the_scan_tallies_the_cut_that_bound_and_ignores_the_dte_window(monkeypatch, history):
+    """Every chain carries hundreds of weeklies and LEAPs; counting them would bury the answer."""
+    history("T", [10.0 + (i % 3) * 0.1 for i in range(60)])
+    today = dt.date(2026, 1, 5)
+
+    def opt(exp, strike, **over):
+        base = dict(option=occ("T", exp, strike), bid=0.30, ask=0.32, delta=-0.25, open_interest=500, iv=0.4)
+        return {**base, **over}
+
+    payload = {
+        "close": 10.0,
+        "current_price": 10.0,
+        "iv30": 40.0,
+        "options": [
+            opt(dt.date(2026, 1, 9), 9.0),  # 4 dte: never a candidate
+            opt(dt.date(2026, 6, 5), 9.0),  # 151 dte: same
+            opt(dt.date(2026, 2, 4), 9.0, delta=-0.02),  # too far out
+            opt(dt.date(2026, 2, 4), 9.5, open_interest=1),  # nobody trades it
+            opt(dt.date(2026, 2, 4), 11.0),  # $1100 collateral against $1000
+            opt(dt.date(2026, 2, 4), 8.5),  # tradeable
+        ],
+    }
+    monkeypatch.setattr("csp.score.chain", lambda sym: payload)
+    monkeypatch.setattr("csp.score.earnings_date", lambda sym: None)
+
+    rows, why = scan_symbol("T", Filters(capital=1000), today=today)
+    assert [r.strike for r in rows] == [8.5]
+    assert why == Counter({"cash": 1, "delta": 1, "oi": 1})
+
+
+def test_an_earnings_drop_is_counted_as_one(monkeypatch, history):
+    """The earnings cut lives in the scan, not in `reject`, so it has to be tallied there too."""
+    history("T", [10.0 + (i % 3) * 0.1 for i in range(60)])
+    payload = {
+        "close": 10.0,
+        "current_price": 10.0,
+        "iv30": 40.0,
+        "options": [
+            dict(
+                option=occ("T", dt.date(2026, 2, 4), 9.0),
+                bid=0.30,
+                ask=0.32,
+                delta=-0.25,
+                open_interest=500,
+                iv=0.4,
+            )
+        ],
+    }
+    monkeypatch.setattr("csp.score.chain", lambda sym: payload)
+    monkeypatch.setattr("csp.score.earnings_date", lambda sym: dt.date(2026, 1, 28))
+
+    rows, why = scan_symbol("T", Filters(capital=1000), today=dt.date(2026, 1, 5))
+    assert rows == [] and why == Counter({"earnings": 1})

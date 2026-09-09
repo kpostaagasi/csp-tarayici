@@ -62,6 +62,23 @@ fiyat, piyasanın vadeye kadar beklediği hareket ve skorun hangi bileşenden ge
 CLI'da `--explain` ile geliyor. Kolon seti terminal genişliğine göre kırpılıyor: önce `yld/liq/vrp`,
 sonra `spot/exp/OI/RV30/sprd%` düşer; `sym strike dte ROC%y cush score` asla düşmez.
 
+Hiç kontratı geçmeyen sembol sessizce kaybolmuyor: hangi filtrenin kaç kontratı kestiği
+yazılıyor — CLI'da sembol başına en çok kesen üç filtre, TUI'da panelin son satırında
+(`elendi: AMD sermaye · PLTR delta`) sembol başına birinci sıradaki. Böylece "hiçbiri geçmedi"
+yerine hangi düğmeyi çevireceğin (`c` sermaye, `d` delta, `t` DTE) görünüyor.
+
+```
+   AMD: 599 kontrat elendi · 599 sermaye          # $3000 ile AMD'nin hiçbir striki alınamıyor
+   AMD: 599 kontrat elendi · 409 sermaye · 190 delta   # $30000: alınabilenler de bandın dışında
+   NOK: DTE penceresinde hiç kontrat yok          # 21-45 gün arasında vadesi yok
+```
+
+Sıra bilinçli: önce "bu bir kontrat mı" (DTE penceresi, teminat, IV rank tabanı), sonra
+"satmak isteyeceğim bir kontrat mı" (delta), en son "nasıl işlem görüyor" (kotasyon, spread, OI).
+0.02 deltalık bir kanadın alışı olmaması likidite sorunu değil, bandın dışında olması.
+DTE penceresinin dışındaki yüzlerce haftalık/LEAP hiç sayılmıyor; sayılsaydı tabloyu onlar
+doldururdu.
+
 ## Yapı
 
 Paket artık tek dosya değil, `csp/` altında modüllere ayrıldı:

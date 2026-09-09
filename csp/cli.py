@@ -4,11 +4,12 @@ import argparse
 import datetime as dt
 import json
 import sys
+from collections import Counter
 
 from . import __version__
 from .backtest import recorded, replay, replay_stats, snapshot
 from .cache import CHAINS, WATCH
-from .render import explain, print_trades, table
+from .render import explain, print_trades, table, why_line
 from .score import Filters, best_per_symbol, scan_all
 from .tui import load_watchlist
 from .universe import universe
@@ -103,7 +104,7 @@ def run_snapshot(tickers):
 
 
 def run_scan(tickers, a, f):
-    rows, errs = scan_all(
+    rows, errs, why = scan_all(
         tickers,
         f,
         on_done=lambda n, sym, *_: print(
@@ -114,11 +115,8 @@ def run_scan(tickers, a, f):
 
     top = sorted(best_per_symbol(rows), key=lambda r: -r.score)[: a.top]
     dropped = set(tickers) - {r.sym for r in rows} - {e.split(":")[0] for e in errs}
-    why = "spread / delta / OI / sermaye / kazanç"
-    if f.min_iv_rank is not None:
-        why += " / IV rank"  # the newest cut is the one a reader will not think to suspect
     for t in sorted(dropped):
-        print(f"   {t}: hiçbir kontrat filtreleri geçmedi ({why})", file=sys.stderr)
+        print("   " + why_line(t, why.get(t, Counter())), file=sys.stderr)
     hdr, lines = table(top, 200)
     print(hdr)
     for line in lines:

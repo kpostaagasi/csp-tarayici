@@ -2,10 +2,11 @@
 
 import dataclasses
 import datetime as dt
+from collections import Counter
 
 import pytest
 
-from csp.render import COLUMNS, SORTS, columns, ev_cell, explain, print_trades, table, usd
+from csp.render import COLUMNS, SORTS, columns, ev_cell, explain, print_trades, table, usd, why_line
 from csp.score import best_per_symbol
 
 FULL = sum(len(h) + 1 for h, _, _ in COLUMNS) - 1
@@ -165,3 +166,15 @@ def test_the_panel_line_fits_a_narrow_terminal(row, history):
 
     silent = dataclasses.replace(row, iv_rank=None, iv_rank_n=0, ev_n=None)
     assert not any("IV rank" in line for line in explain(silent))  # nothing recorded: say nothing
+
+
+def test_the_drop_line_ranks_the_cuts_and_stops_at_three():
+    """The knob to move is the one that cut the most contracts; the tail is noise."""
+    why = Counter({"delta": 40, "oi": 12, "spread": 3, "cash": 1})
+    line = why_line("PLTR", why)
+    assert line == "PLTR: 56 kontrat elendi · 40 delta · 12 OI · 3 spread"
+    assert "sermaye" not in line  # fourth place, and the reader already has the answer
+
+
+def test_an_empty_tally_is_an_empty_window_not_a_clean_pass():
+    assert why_line("BRK.B", Counter()) == "BRK.B: DTE penceresinde hiç kontrat yok"
